@@ -1,5 +1,5 @@
-/* Amazon レビュー取得ツール v5.1 — bh life
- * fetch全ページ取得 / 評価パース修正 / Vine正確検知 / Vine別平均
+/* Amazon レビュー取得ツール v5.2 — bh life
+ * タイトルパース修正 / Vine厳格検知 / fetch全ページ自動取得
  */
 (function () {
   'use strict';
@@ -41,7 +41,6 @@
       hits = NEG[k].filter(function(w) { return text.indexOf(w) >= 0; });
       if (hits.length) cats[k] = hits;
     }
-    /* rating=0は未取得なので評価軸では判断しない */
     var neg = (rating > 0 && rating <= 2) || Object.keys(cats).length > 0;
     var pos = !neg && rating >= 4;
     return { neg: neg, pos: pos, cats: cats,
@@ -49,52 +48,71 @@
       color: neg ? '#FF4B4B' : (pos ? '#22C55E' : '#94A3B8') };
   }
 
-  /* ── 評価パース：「5つ星のうち3.0」→ 3.0 を正確に取得 ── */
+  /* ── 評価パース ── */
   function parseRating(el) {
     if (!el) return 0;
     var text = el.textContent || '';
-    /* 日本語: "5つ星のうち3.0" → "のうち" の後の数字 */
-    var m1 = text.match(/のうち(\d+(?:\.\d+)?)/);
+    /* "5つ星のうち3.0" → "のうち" 後の数字を取得 */
+    var m1 = text.match(/のうち\s*(\d+(?:\.\d+)?)/);
     if (m1) return parseFloat(m1[1]);
-    /* 英語: "3.0 out of 5" */
+    /* "3.0 out of 5 stars" */
     var m2 = text.match(/^(\d+(?:\.\d+)?)\s*out/);
     if (m2) return parseFloat(m2[1]);
-    /* 最後の数字（フォールバック） */
-    var nums = text.match(/\d+(?:\.\d+)?/g);
-    if (nums && nums.length > 0) return parseFloat(nums[nums.length - 1]);
     return 0;
   }
 
-  /* ── Vine 判定：専用バッジ要素のみ ── */
-  function isVineReview(el) {
-    /* data-hook でバッジ要素を確認 */
-    if (el.querySelector('[data-hook="avp-badge-linkless"],[data-hook="avp-badge"]')) return true;
-    /* テキストで厳格判定（Vine先取り or Vineプログラム のみ） */
-    var t = el.textContent || '';
-    return t.indexOf('Vine先取りプログラム') >= 0 || t.indexOf('Vineプログラムカスタマー') >= 0;
+  /* ── タイトルパース：星テキストを除外 ── */
+  function parseTitle(el) {
+    if (!el) return '';
+    /* アイコン系スパンを除いたテキストを取得 */
+    var clone = el.cloneNode(true);
+    /* .a-icon-alt（星テキスト）と i タグを削除 */
+    var removes = clone.querySelectorAll('.a-icon-alt, i.a-icon');
+    removes.forEach(function(n) { n.parentNode && n.parentNode.removeChild(n); });
+    return clone.textContent.replace(/\s+/g, ' ').trim();
   }
 
-  /* ── DOM からレビューをパース ── */
+  /* ── Vine 判定：data-hook 属性のみで判断（テキスト検索なし） ── */
+  function isVineReview(el) {
+    /* Amazon が付与するバッジの data-hook を確認 */
+    return !!(
+      el.querySelector('[data-hook="avp-badge-linkless"]') ||
+      el.querySelector('[data-hook="avp-badge"]') ||
+      el.querySelector('[data-hook="vine-badge"]') ||
+      el.querySelector('[data-hook="vine-program"]')
+    );
+  }
+
+  /* ── レビューをパース ── */
   function parseReviews(doc) {
     var reviews = [];
     doc.querySelectorAll('[data-hook="review"]').forEach(function(el) {
-      var rEl = el.querySelector('[data-hook="review-star-rating"] .a-icon-alt, i[data-hook="review-star-rating"] .a-icon-alt');
+      /* 評価 */
+      var rEl = el.querySelector('i[data-hook="review-star-rating"] .a-icon-alt')
+             || el.querySelector('span[data-hook="review-star-rating"] .a-icon-alt')
+             || el.querySelector('[data-hook="cmps-review-star-rating"] .a-icon-alt');
       var rating = parseRating(rEl);
 
-      var tEl = el.querySelector('[data-hook="review-title"] span:last-child');
-      var title = tEl ? tEl.textContent.trim() : '';
+      /* タイトル */
+      var titleEl = el.querySelector('[data-hook="review-title"]');
+      var title = parseTitle(titleEl);
 
+      /* 本文 */
       var bEl = el.querySelector('[data-hook="review-body"] span');
       var body = bEl ? bEl.textContent.trim() : '';
 
+      /* 日付 */
       var dEl = el.querySelector('[data-hook="review-date"]');
-      var date = dEl ? dEl.textContent.replace('日本でレビュー済み -','').trim() : '';
+      var date = dEl ? dEl.textContent.replace('日本でレビュー済み -', '').trim() : '';
 
+      /* Vine */
       var vine = isVineReview(el);
 
       if (body || title) {
-        reviews.push({ rating: rating, title: title, body: body, date: date, vine: vine,
-          cls: classify(title + ' ' + body, rating) });
+        reviews.push({
+          rating: rating, title: title, body: body, date: date, vine: vine,
+          cls: classify(title + ' ' + body, rating)
+        });
       }
     });
     return reviews;
@@ -160,23 +178,21 @@
       b.style.background = 'transparent'; b.style.color = c; b.style.borderColor = c;
     });
     var ac = {all:'#FF9900',pos:'#22C55E',neu:'#94A3B8',neg:'#FF4B4B',vine:'#8B5CF6',novine:'#06B6D4'}[f];
-    btn.style.background = ac; btn.style.color = '#fff';
-    if (f === 'all') btn.style.color = '#000';
+    btn.style.background = ac; btn.style.color = f === 'all' ? '#000' : '#fff';
     document.querySelectorAll('#_bhl_amz_list [data-type]').forEach(function(el) {
-      var t = el.getAttribute('data-type');
       var v = el.getAttribute('data-vine');
       if (f === 'all')    { el.style.display = ''; return; }
       if (f === 'vine')   { el.style.display = v === '1' ? '' : 'none'; return; }
       if (f === 'novine') { el.style.display = v === '0' ? '' : 'none'; return; }
-      el.style.display = t === f ? '' : 'none';
+      el.style.display = el.getAttribute('data-type') === f ? '' : 'none';
     });
   };
 
-  /* ── 平均値計算ヘルパー ── */
+  /* ── 平均値 ── */
   function avgRating(list) {
     var valid = list.filter(function(r){ return r.rating > 0; });
-    if (!valid.length) return '?';
-    return (valid.reduce(function(s,r){ return s+r.rating; },0) / valid.length).toFixed(1);
+    if (!valid.length) return null;
+    return (valid.reduce(function(s,r){ return s+r.rating; },0) / valid.length).toFixed(2);
   }
 
   /* ── パネル描画 ── */
@@ -184,25 +200,26 @@
     var prog = document.getElementById('_bhl_amz_prog');
     if (prog) prog.remove();
 
-    var negC   = reviews.filter(function(r){ return r.cls.neg; }).length;
-    var posC   = reviews.filter(function(r){ return r.cls.pos; }).length;
-    var neuC   = reviews.length - negC - posC;
-    var vineRv = reviews.filter(function(r){ return r.vine; });
-    var noVine = reviews.filter(function(r){ return !r.vine; });
-    var vineC  = vineRv.length;
+    var vineRv  = reviews.filter(function(r){ return  r.vine; });
+    var noVine  = reviews.filter(function(r){ return !r.vine; });
+    var negC    = reviews.filter(function(r){ return r.cls.neg; }).length;
+    var posC    = reviews.filter(function(r){ return r.cls.pos; }).length;
+    var neuC    = reviews.length - negC - posC;
+    var vineC   = vineRv.length;
+    var novineC = noVine.length;
     var vinePct = reviews.length > 0 ? Math.round(vineC / reviews.length * 100) : 0;
 
-    var avgAll    = avgRating(reviews);
-    var avgVine   = avgRating(vineRv);
-    var avgNoVine = avgRating(noVine);
+    var avgAll    = avgRating(reviews)   || '?';
+    var avgVine   = avgRating(vineRv)    || '?';
+    var avgNoVine = avgRating(noVine)    || '?';
 
-    /* 評価分布（全体） */
+    /* 評価分布 */
     var dist = {1:0,2:0,3:0,4:0,5:0};
-    reviews.forEach(function(r){ var s=Math.round(r.rating); if(dist[s]!==undefined) dist[s]++; });
+    reviews.forEach(function(r){ var s = Math.round(r.rating); if (dist[s] !== undefined) dist[s]++; });
     var maxD = Math.max.apply(null,[1,2,3,4,5].map(function(s){return dist[s];})) || 1;
     var distBars = [5,4,3,2,1].map(function(s){
-      var cnt=dist[s], pct=Math.round(cnt/maxD*100);
-      var color=s>=4?'#22C55E':(s===3?'#94A3B8':'#FF4B4B');
+      var cnt = dist[s], pct = Math.round(cnt / maxD * 100);
+      var color = s >= 4 ? '#22C55E' : (s === 3 ? '#94A3B8' : '#FF4B4B');
       return '<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">'
         +'<span style="color:#FF9900;font-size:11px;width:14px;text-align:right">'+s+'</span>'
         +'<span style="color:#FF9900;font-size:10px">★</span>'
@@ -221,21 +238,34 @@
         +Object.keys(catC).map(function(c){ return '<span style="background:#2D1515;color:#FCA5A5;padding:3px 8px;border-radius:20px;font-size:11px">'+c+' <strong>'+catC[c]+'件</strong></span>'; }).join('')
         +'</div></div>' : '';
 
+    /* Vine差分メッセージ */
+    var vineDiff = '';
+    if (avgVine !== '?' && avgNoVine !== '?') {
+      var diff = (parseFloat(avgVine) - parseFloat(avgNoVine)).toFixed(2);
+      if (parseFloat(diff) > 0) {
+        vineDiff = '　<span style="color:#FCD34D;font-size:10px">⚠ VineはVine以外より +'+diff+'★ 高め</span>';
+      }
+    }
+
     /* レビューリスト */
     var listHTML = reviews.slice(0,300).map(function(r){
-      var stars='★'.repeat(Math.round(r.rating))+'☆'.repeat(5-Math.round(r.rating));
-      var catTags=Object.keys(r.cls.cats).map(function(c){
+      var rnd = Math.round(r.rating);
+      var stars = '★'.repeat(rnd) + '☆'.repeat(5 - rnd);
+      var catTags = Object.keys(r.cls.cats).map(function(c){
         return '<span style="background:#2D1515;color:#FCA5A5;padding:2px 6px;border-radius:10px;font-size:10px;margin-right:3px">'+c+'</span>';
       }).join('');
-      var vb=r.vine?'<span style="background:#3B1E6E;color:#C4B5FD;padding:2px 6px;border-radius:10px;font-size:10px;margin-right:3px">Vine</span>':'';
+      var vb = r.vine ? '<span style="background:#3B1E6E;color:#C4B5FD;padding:2px 6px;border-radius:10px;font-size:10px;margin-right:3px">Vine</span>' : '';
+      var ratingDisp = r.rating > 0 ? r.rating.toFixed(1) : '?';
       return '<div data-type="'+(r.cls.neg?'neg':(r.cls.pos?'pos':'neu'))+'" data-vine="'+(r.vine?'1':'0')+'" style="border-left:3px solid '+r.cls.color+';padding:10px 10px 10px 12px;margin-top:8px;background:#162032;border-radius:0 6px 6px 0">'
         +'<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:6px;margin-bottom:4px">'
-        +'<div><span style="color:#FF9900;letter-spacing:1px">'+stars+'</span>'
+        +'<div>'
+        +'<span style="color:#FF9900;letter-spacing:1px;font-size:13px">'+stars+'</span>'
+        +' <span style="color:#FF9900;font-size:11px;font-weight:700">'+ratingDisp+'</span>'
         +' <span style="background:'+r.cls.color+'22;color:'+r.cls.color+';font-size:10px;font-weight:700;padding:2px 7px;border-radius:10px">'+r.cls.label+'</span>'
-        +(r.vine?' <span style="background:#3B1E6E;color:#C4B5FD;font-size:10px;padding:2px 6px;border-radius:10px">Vine</span>':'')+'</div>'
+        +'</div>'
         +'<span style="font-size:10px;color:#475569;white-space:nowrap;flex-shrink:0">'+r.date+'</span></div>'
-        +(r.title?'<div style="font-weight:600;color:#CBD5E1;margin-bottom:3px;font-size:12px">'+r.title+'</div>':'')
-        +(catTags?'<div style="margin-bottom:4px">'+catTags+'</div>':'')
+        +(r.title ? '<div style="font-weight:600;color:#CBD5E1;margin-bottom:3px;font-size:12px">'+r.title+'</div>' : '')
+        +(vb+catTags ? '<div style="margin-bottom:4px">'+vb+catTags+'</div>' : '')
         +'<div style="color:#94A3B8;font-size:12px;line-height:1.6">'+r.body.replace(/\n/g,'<br>').substring(0,280)+(r.body.length>280?'…':'')+'</div>'
         +'</div>';
     }).join('');
@@ -252,32 +282,33 @@
       +'<div style="font-size:11px;color:#94A3B8;margin-top:2px">ASIN: '+asin+'　<span style="color:#FF9900">'+pages+'ページ / '+reviews.length+'件取得</span></div></div>'
       +'<button onclick="document.getElementById(\'_bhl_amz_panel\').remove()" style="background:none;border:none;color:#94A3B8;font-size:22px;cursor:pointer;padding:0 0 0 8px;line-height:1">&times;</button></div>'
 
-      /* サマリー上段：評価系（4列） */
-      +'<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;padding:12px 16px 6px;background:#162032">'
-      +'<div style="text-align:center;background:#0F172A;padding:8px 4px;border-radius:8px"><div style="font-size:18px;font-weight:700;color:#FF9900">'+avgAll+'</div><div style="font-size:9px;color:#64748B;margin-top:2px">全体平均</div></div>'
-      +'<div style="text-align:center;background:#0F172A;padding:8px 4px;border-radius:8px;border:1px solid #3B1E6E"><div style="font-size:18px;font-weight:700;color:#C4B5FD">'+avgVine+'</div><div style="font-size:9px;color:#64748B;margin-top:2px">Vine平均</div></div>'
-      +'<div style="text-align:center;background:#0F172A;padding:8px 4px;border-radius:8px;border:1px solid #0E7490"><div style="font-size:18px;font-weight:700;color:#67E8F9">'+avgNoVine+'</div><div style="font-size:9px;color:#64748B;margin-top:2px">非Vine平均</div></div>'
-      +'<div style="text-align:center;background:#0F172A;padding:8px 4px;border-radius:8px"><div style="font-size:18px;font-weight:700;color:#FF4B4B">'+negC+'</div><div style="font-size:9px;color:#64748B;margin-top:2px">ネガティブ</div></div>'
+      /* 平均評価（3列：全体 / Vine / 非Vine） */
+      +'<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;padding:12px 16px 6px;background:#162032">'
+      +'<div style="text-align:center;background:#0F172A;padding:10px 4px;border-radius:8px">'
+        +'<div style="font-size:22px;font-weight:700;color:#FF9900">'+avgAll+'</div>'
+        +'<div style="font-size:10px;color:#94A3B8;margin-top:2px">★ 全体平均</div>'
+        +'<div style="font-size:10px;color:#64748B">'+reviews.length+'件</div></div>'
+      +'<div style="text-align:center;background:#0F172A;padding:10px 4px;border-radius:8px;border:1px solid #3B1E6E">'
+        +'<div style="font-size:22px;font-weight:700;color:#C4B5FD">'+avgVine+'</div>'
+        +'<div style="font-size:10px;color:#8B5CF6;margin-top:2px">★ Vine平均</div>'
+        +'<div style="font-size:10px;color:#64748B">'+vineC+'件（'+vinePct+'%）</div></div>'
+      +'<div style="text-align:center;background:#0F172A;padding:10px 4px;border-radius:8px;border:1px solid #0E7490">'
+        +'<div style="font-size:22px;font-weight:700;color:#67E8F9">'+avgNoVine+'</div>'
+        +'<div style="font-size:10px;color:#06B6D4;margin-top:2px">★ 非Vine平均</div>'
+        +'<div style="font-size:10px;color:#64748B">'+novineC+'件（'+(100-vinePct)+'%）</div></div>'
       +'</div>'
 
-      /* サマリー下段：件数系（4列） */
-      +'<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;padding:6px 16px 12px;background:#162032;border-bottom:1px solid #1E3A5F">'
+      /* Vine差分メッセージ */
+      +(vineDiff ? '<div style="padding:6px 16px;background:#1A1230;font-size:11px;color:#C4B5FD;border-bottom:1px solid #2D1A5F">'+
+        'Vine <strong>'+avgVine+'★</strong>　非Vine <strong>'+avgNoVine+'★</strong>'+vineDiff+'</div>' : '')
+
+      /* ネガ/ポジ件数（4列） */
+      +'<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;padding:8px 16px 12px;background:#162032;border-bottom:1px solid #1E3A5F">'
       +'<div style="text-align:center;background:#0F172A;padding:8px 4px;border-radius:8px"><div style="font-size:18px;font-weight:700;color:#22C55E">'+posC+'</div><div style="font-size:9px;color:#64748B;margin-top:2px">ポジティブ</div></div>'
       +'<div style="text-align:center;background:#0F172A;padding:8px 4px;border-radius:8px"><div style="font-size:18px;font-weight:700;color:#94A3B8">'+neuC+'</div><div style="font-size:9px;color:#64748B;margin-top:2px">ニュートラル</div></div>'
-      +'<div style="text-align:center;background:#0F172A;padding:8px 4px;border-radius:8px;border:1px solid #3B1E6E"><div style="font-size:18px;font-weight:700;color:#C4B5FD">'+vineC+'</div><div style="font-size:9px;color:#64748B;margin-top:2px">Vine件数</div></div>'
-      +'<div style="text-align:center;background:#0F172A;padding:8px 4px;border-radius:8px;border:1px solid #0E7490"><div style="font-size:18px;font-weight:700;color:#67E8F9">'+noVine.length+'</div><div style="font-size:9px;color:#64748B;margin-top:2px">非Vine件数</div></div>'
+      +'<div style="text-align:center;background:#0F172A;padding:8px 4px;border-radius:8px"><div style="font-size:18px;font-weight:700;color:#FF4B4B">'+negC+'</div><div style="font-size:9px;color:#64748B;margin-top:2px">ネガティブ</div></div>'
+      +'<div style="text-align:center;background:#0F172A;padding:8px 4px;border-radius:8px"><div style="font-size:18px;font-weight:700;color:#FF9900">'+(negC > 0 ? Math.round(negC/reviews.length*100) : 0)+'%</div><div style="font-size:9px;color:#64748B;margin-top:2px">ネガ率</div></div>'
       +'</div>'
-
-      /* Vine補足 */
-      +(vineC > 0
-        ? '<div style="padding:8px 16px;background:#1A1230;border-bottom:1px solid #2D1A5F;font-size:11px;line-height:1.8">'
-          +'<span style="color:#C4B5FD">■ Vine '+vineC+'件（全体の'+vinePct+'%）　平均 <strong>'+avgVine+'★</strong></span><br>'
-          +'<span style="color:#67E8F9">■ 非Vine '+noVine.length+'件　平均 <strong>'+avgNoVine+'★</strong></span>'
-          +(avgVine !== '?' && avgNoVine !== '?' && parseFloat(avgVine) > parseFloat(avgNoVine)
-            ? '<br><span style="color:#FCD34D;font-size:10px">⚠ VineはVine以外より '+( parseFloat(avgVine)-parseFloat(avgNoVine)).toFixed(1)+'★ 高め</span>'
-            : '')
-          +'</div>'
-        : '')
 
       /* 評価分布 */
       +'<div style="padding:12px 16px;background:#162032;border-bottom:1px solid #1E3A5F">'
@@ -294,7 +325,7 @@
       +'<button data-f="neu"    onclick="_bhlAmzFilter(\'neu\',this)"    style="padding:4px 9px;border-radius:20px;border:1px solid #94A3B8;background:transparent;color:#94A3B8;font-size:11px;cursor:pointer">普通('+neuC+')</button>'
       +'<button data-f="neg"    onclick="_bhlAmzFilter(\'neg\',this)"    style="padding:4px 9px;border-radius:20px;border:1px solid #FF4B4B;background:transparent;color:#FF4B4B;font-size:11px;cursor:pointer">悪い('+negC+')</button>'
       +'<button data-f="vine"   onclick="_bhlAmzFilter(\'vine\',this)"   style="padding:4px 9px;border-radius:20px;border:1px solid #8B5CF6;background:transparent;color:#C4B5FD;font-size:11px;cursor:pointer">Vine('+vineC+')</button>'
-      +'<button data-f="novine" onclick="_bhlAmzFilter(\'novine\',this)" style="padding:4px 9px;border-radius:20px;border:1px solid #06B6D4;background:transparent;color:#67E8F9;font-size:11px;cursor:pointer">非Vine('+noVine.length+')</button>'
+      +'<button data-f="novine" onclick="_bhlAmzFilter(\'novine\',this)" style="padding:4px 9px;border-radius:20px;border:1px solid #06B6D4;background:transparent;color:#67E8F9;font-size:11px;cursor:pointer">非Vine('+novineC+')</button>'
       +'<button onclick="_bhlAmzCSV(window._bhlAmzAllReviews)" style="margin-left:auto;padding:4px 9px;border-radius:20px;border:1px solid #3B82F6;background:transparent;color:#3B82F6;font-size:11px;cursor:pointer">📥 CSV</button></div>'
 
       /* リスト */
@@ -315,14 +346,14 @@
       if (!isNaN(n) && n > max) max = n;
     });
     if (max > 1) return max;
-    var t = document.body.innerText.match(/(\d+)\s*件のカスタマーレビュー/);
-    if (t) return Math.ceil(parseInt(t[1]) / 10);
+    var t1 = document.body.innerText.match(/(\d+)\s*件のカスタマーレビュー/);
+    if (t1) return Math.ceil(parseInt(t1[1]) / 10);
     var t2 = document.body.innerText.match(/(\d[\d,]*)\s*件の評価/);
     if (t2) return Math.ceil(parseInt(t2[1].replace(/,/g,'')) / 10);
     return 15;
   }
 
-  /* ── メイン ── */
+  /* ── メイン：fetch 全ページ ── */
   window._bhlAmzRunning = true;
   var allReviews = parseReviews(document);
   var ptEl = document.querySelector('#productTitle, h1.a-size-large');
@@ -356,8 +387,15 @@
     showPanel(allReviews, pages, productTitle);
     playDone();
     var vc = allReviews.filter(function(r){ return r.vine; }).length;
+    var nvc = allReviews.length - vc;
+    var aVine = avgRating(allReviews.filter(function(r){ return r.vine; }));
+    var aNoVine = avgRating(allReviews.filter(function(r){ return !r.vine; }));
     setTimeout(function() {
-      alert('✅ レビュー取得完了！\n\n合計 ' + allReviews.length + ' 件\nうち Amazon Vine: ' + vc + ' 件\n\n「📥 CSV」でダウンロードしてClaudeにアップロードしてください。');
+      alert('✅ レビュー取得完了！\n\n'
+        + '合計 ' + allReviews.length + ' 件\n'
+        + '├ Vine: ' + vc + '件　平均 ' + (aVine||'?') + '★\n'
+        + '└ 非Vine: ' + nvc + '件　平均 ' + (aNoVine||'?') + '★\n\n'
+        + '「📥 CSV」でダウンロードしてClaudeにアップロードしてください。');
     }, 500);
   }
 
