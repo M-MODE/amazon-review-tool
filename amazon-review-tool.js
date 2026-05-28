@@ -1,10 +1,8 @@
-/* Amazon レビュー取得ツール v4.0 — bh life
- * 楽天と同じページ送り方式（localStorage蓄積）
+/* Amazon レビュー取得ツール v5.0 — bh life
+ * fetch()で全ページ取得（楽天と同じ方式）
  */
 (function () {
   'use strict';
-
-  var STORE_KEY = '_bhl_amz4';
 
   /* ── ASIN 取得 ── */
   var url = location.href, asin = null, m;
@@ -14,16 +12,20 @@
 
   if (!asin) { alert('Amazonの商品ページまたはレビューページで実行してください'); return; }
 
-  /* ── 商品ページ → レビューページへ遷移（ストレージリセット） ── */
+  /* ── 商品ページ → レビューページへ遷移 ── */
   if (url.indexOf('/product-reviews/') < 0) {
-    try { localStorage.removeItem(STORE_KEY + '_' + asin); } catch(e) {}
     location.href = 'https://www.amazon.co.jp/product-reviews/' + asin + '/?sortBy=recent&pageNumber=1';
     return;
   }
 
-  /* ── 現在ページ番号 ── */
-  var pgM = url.match(/pageNumber=(\d+)/);
-  var curPage = pgM ? parseInt(pgM[1]) : 1;
+  /* ── 既に動いていたら止める ── */
+  if (window._bhlAmzRunning) {
+    window._bhlAmzRunning = false;
+    var ex = document.getElementById('_bhl_amz_prog');
+    if (ex) ex.remove();
+    alert('取得を中断しました');
+    return;
+  }
 
   /* ── ネガティブ辞書 ── */
   var NEG = {
@@ -47,10 +49,10 @@
       color: neg ? '#FF4B4B' : (pos ? '#22C55E' : '#94A3B8') };
   }
 
-  /* ── 現ページのレビューを取得 ── */
-  function scrapeCurrentPage() {
+  /* ── DOM からレビューをパース ── */
+  function parseReviews(doc) {
     var reviews = [];
-    document.querySelectorAll('[data-hook="review"]').forEach(function(el) {
+    doc.querySelectorAll('[data-hook="review"]').forEach(function(el) {
       var rEl = el.querySelector('[data-hook="review-star-rating"] .a-icon-alt, i[data-hook="review-star-rating"] .a-icon-alt');
       var rM = (rEl ? rEl.textContent : '').match(/(\d+(\.\d+)?)/);
       var rating = rM ? parseFloat(rM[1]) : 0;
@@ -62,7 +64,7 @@
       var body = bEl ? bEl.textContent.trim() : '';
 
       var dEl = el.querySelector('[data-hook="review-date"]');
-      var date = dEl ? dEl.textContent.replace('日本でレビュー済み -', '').trim() : '';
+      var date = dEl ? dEl.textContent.replace('日本でレビュー済み -','').trim() : '';
 
       var isVine = !!(el.querySelector('[data-hook="avp-badge-linkless"],[data-hook="avp-badge"]')
         || el.innerHTML.indexOf('Vine') >= 0);
@@ -75,80 +77,27 @@
     return reviews;
   }
 
-  /* ── 総ページ数を推定 ── */
-  function getTotalPages() {
-    /* ページネーションから最大ページ番号を取得 */
-    var max = curPage;
-    document.querySelectorAll('.a-pagination li').forEach(function(li) {
-      var n = parseInt(li.textContent.trim());
-      if (!isNaN(n) && n > max) max = n;
-    });
-    if (max > curPage) return max;
-
-    /* レビュー総件数テキストから計算 */
-    var countEl = document.querySelector('[data-hook="cr-filter-info-review-count"], #filter-info-section');
-    if (countEl) {
-      var cm = countEl.textContent.match(/(\d[\d,]*)\s*件/);
-      if (cm) return Math.ceil(parseInt(cm[1].replace(/,/g,'')) / 10);
+  /* ── 進捗バー ── */
+  function upsertProgress(page, total, count) {
+    var el = document.getElementById('_bhl_amz_prog');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = '_bhl_amz_prog';
+      el.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:2147483647;background:#0F172A;color:#fff;padding:8px 16px;font-family:sans-serif;font-size:13px;box-shadow:0 2px 8px rgba(0,0,0,.5);display:flex;align-items:center;gap:12px';
+      if (!document.getElementById('_bhl_sty')) {
+        var s = document.createElement('style');
+        s.id = '_bhl_sty';
+        s.textContent = '@keyframes _bhlp{0%{opacity:.4}50%{opacity:1}100%{opacity:.4}}';
+        document.head.appendChild(s);
+      }
+      document.body.appendChild(el);
     }
-    /* "44件のカスタマーレビュー" など */
-    var bodyText = document.body.innerText;
-    var bm = bodyText.match(/(\d+)\s*件のカスタマーレビュー/);
-    if (bm) return Math.ceil(parseInt(bm[1]) / 10);
-
-    return 999; /* 不明なら多めに設定 */
-  }
-
-  /* ── 次ページがあるか ── */
-  function hasNext() {
-    /* 「次へ」リンクが存在するか */
-    var nextLink = document.querySelector('.a-pagination .a-last:not(.a-disabled) a');
-    if (nextLink) return true;
-    /* 現ページのレビュー件数が10件あれば次があると仮定 */
-    var cnt = document.querySelectorAll('[data-hook="review"]').length;
-    return cnt >= 10;
-  }
-
-  /* ── localStorage 読み書き ── */
-  var stKey = STORE_KEY + '_' + asin;
-  var stored;
-  try { stored = JSON.parse(localStorage.getItem(stKey) || 'null'); } catch(e) { stored = null; }
-  if (!stored || stored.asin !== asin) {
-    stored = { asin: asin, reviews: [], pages: 0, productTitle: '' };
-  }
-
-  /* 商品名取得 */
-  var ptEl = document.querySelector('#productTitle, h1.a-size-large');
-  if (ptEl && !stored.productTitle) stored.productTitle = ptEl.textContent.trim();
-
-  /* 1ページ目ならリセット */
-  if (curPage === 1) { stored.reviews = []; }
-
-  /* 現ページのレビューを追加 */
-  var newRevs = scrapeCurrentPage();
-  stored.reviews = stored.reviews.concat(newRevs);
-  stored.pages = curPage;
-  try { localStorage.setItem(stKey, JSON.stringify(stored)); } catch(e) {}
-
-  /* ── 進捗バー表示 ── */
-  function showProgress() {
-    var ex = document.getElementById('_bhl_amz_prog');
-    if (ex) ex.remove();
-    var div = document.createElement('div');
-    div.id = '_bhl_amz_prog';
-    div.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:2147483647;background:#0F172A;color:#fff;padding:8px 16px;font-family:sans-serif;font-size:13px;box-shadow:0 2px 8px rgba(0,0,0,.5);display:flex;align-items:center;gap:12px';
-    if (!document.getElementById('_bhl_amz_sty')) {
-      var s = document.createElement('style');
-      s.id = '_bhl_amz_sty';
-      s.textContent = '@keyframes _bhl_p{0%{opacity:.4}50%{opacity:1}100%{opacity:.4}}';
-      document.head.appendChild(s);
-    }
-    div.innerHTML = '<span style="color:#FF9900;font-weight:700">★ Amazonレビュー取得中</span>'
-      + '<span style="color:#94A3B8">' + curPage + 'ページ目　累計 <strong style="color:#fff;font-size:15px">' + stored.reviews.length + '</strong> 件</span>'
+    var pct = total > 0 ? Math.round(page / total * 100) : 0;
+    el.innerHTML = '<span style="color:#FF9900;font-weight:700">★ Amazonレビュー取得中</span>'
+      + '<span style="color:#94A3B8">' + page + ' / ' + (total||'?') + 'ページ　累計 <strong style="color:#fff">' + count + '</strong> 件</span>'
       + '<div style="flex:1;height:6px;background:#1E3A5F;border-radius:3px;overflow:hidden">'
-      + '<div style="height:100%;width:60%;background:linear-gradient(90deg,#FF9900,#FFD700);border-radius:3px;animation:_bhl_p 1s ease-in-out infinite"></div></div>'
-      + '<span style="color:#FF9900;font-size:11px">次のページへ移動中…</span>';
-    document.body.appendChild(div);
+      + '<div style="height:100%;width:' + (pct||20) + '%;background:linear-gradient(90deg,#FF9900,#FFD700);border-radius:3px;'+(pct?'':'animation:_bhlp 1s ease-in-out infinite')+'"></div></div>'
+      + '<span style="color:#64748B;font-size:10px">再クリックで中断</span>';
   }
 
   /* ── 完了音 ── */
@@ -188,8 +137,7 @@
       b.style.background='transparent'; b.style.color=c; b.style.borderColor=c;
     });
     var ac = {all:'#FF9900',pos:'#22C55E',neu:'#94A3B8',neg:'#FF4B4B',vine:'#8B5CF6'}[f];
-    btn.style.background=ac; btn.style.color='#fff';
-    if(f==='all') btn.style.color='#000';
+    btn.style.background=ac; btn.style.color=f==='all'?'#000':'#fff';
     document.querySelectorAll('#_bhl_amz_list [data-type]').forEach(function(el) {
       if(f==='all'){ el.style.display=''; return; }
       if(f==='vine'){ el.style.display=el.getAttribute('data-vine')==='1'?'':'none'; return; }
@@ -198,7 +146,10 @@
   };
 
   /* ── パネル描画 ── */
-  function showPanel(reviews) {
+  function showPanel(reviews, pages, productTitle) {
+    var prog = document.getElementById('_bhl_amz_prog');
+    if (prog) prog.remove();
+
     var negC=reviews.filter(function(r){return r.cls.neg;}).length;
     var posC=reviews.filter(function(r){return r.cls.pos;}).length;
     var neuC=reviews.length-negC-posC;
@@ -210,7 +161,7 @@
     var maxD=Math.max.apply(null,[1,2,3,4,5].map(function(s){return dist[s];})) || 1;
 
     var distBars=[5,4,3,2,1].map(function(s){
-      var cnt=dist[s],pct=Math.round(cnt/maxD*100);
+      var cnt=dist[s], pct=Math.round(cnt/maxD*100);
       var color=s>=4?'#22C55E':(s===3?'#94A3B8':'#FF4B4B');
       return '<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">'
         +'<span style="color:#FF9900;font-size:11px;width:14px;text-align:right">'+s+'</span>'
@@ -253,8 +204,8 @@
     panel.innerHTML=
       '<div style="background:#1E3A5F;padding:14px 16px;border-radius:12px 12px 0 0;display:flex;align-items:center;gap:10px">'
       +'<div style="background:#FF9900;border-radius:50%;width:32px;height:32px;display:flex;align-items:center;justify-content:center;font-size:17px;flex-shrink:0">★</div>'
-      +'<div style="flex:1;min-width:0"><div style="font-weight:700;font-size:14px;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+stored.productTitle+'</div>'
-      +'<div style="font-size:11px;color:#94A3B8;margin-top:2px">ASIN: '+asin+'　<span style="color:#FF9900">'+stored.pages+'ページ / '+reviews.length+'件</span></div></div>'
+      +'<div style="flex:1;min-width:0"><div style="font-weight:700;font-size:14px;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+productTitle+'</div>'
+      +'<div style="font-size:11px;color:#94A3B8;margin-top:2px">ASIN: '+asin+'　<span style="color:#FF9900">'+pages+'ページ / '+reviews.length+'件</span></div></div>'
       +'<button onclick="document.getElementById(\'_bhl_amz_panel\').remove()" style="background:none;border:none;color:#94A3B8;font-size:22px;cursor:pointer;padding:0 0 0 8px;line-height:1">&times;</button></div>'
 
       +'<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:6px;padding:12px 16px;background:#162032;border-bottom:1px solid #1E3A5F">'
@@ -264,7 +215,7 @@
       +'<div style="text-align:center;background:#0F172A;padding:8px 4px;border-radius:8px"><div style="font-size:18px;font-weight:700;color:#FF4B4B">'+negC+'</div><div style="font-size:9px;color:#64748B;margin-top:2px">ネガティブ</div></div>'
       +'<div style="text-align:center;background:#0F172A;padding:8px 4px;border-radius:8px;border:1px solid #3B1E6E"><div style="font-size:18px;font-weight:700;color:#C4B5FD">'+vineC+'</div><div style="font-size:9px;color:#64748B;margin-top:2px">Vine</div></div></div>'
 
-      +(vineC>0?'<div style="padding:6px 16px;background:#1A1230;border-bottom:1px solid #2D1A5F;font-size:11px;color:#C4B5FD">うち Amazon Vine レビュー <strong>'+vineC+'件</strong>（全体の'+Math.round(vineC/reviews.length*100)+'%）</div>':'')
+      +(vineC>0?'<div style="padding:6px 16px;background:#1A1230;border-bottom:1px solid #2D1A5F;font-size:11px;color:#C4B5FD">うち Amazon Vine <strong>'+vineC+'件</strong>（全体の'+Math.round(vineC/reviews.length*100)+'%）</div>':'')
 
       +'<div style="padding:12px 16px;background:#162032;border-bottom:1px solid #1E3A5F">'
       +'<div style="font-size:11px;font-weight:700;color:#94A3B8;margin-bottom:8px;text-transform:uppercase;letter-spacing:.05em">★ 評価分布</div>'
@@ -285,22 +236,79 @@
     window._bhlAmzAllReviews = reviews;
   }
 
-  /* ── 次ページへ or 完了 ── */
-  if (newRevs.length > 0 && hasNext()) {
-    showProgress();
-    setTimeout(function() {
-      location.href = 'https://www.amazon.co.jp/product-reviews/' + asin
-        + '/?sortBy=recent&pageNumber=' + (curPage + 1);
-    }, 500);
-  } else {
-    /* 完了 */
-    try { localStorage.removeItem(stKey); } catch(e) {}
-    showPanel(stored.reviews);
+  /* ── メイン：fetch で全ページ取得 ── */
+  window._bhlAmzRunning = true;
+
+  var baseUrl = 'https://www.amazon.co.jp/product-reviews/' + asin + '/?sortBy=recent&pageNumber=';
+  var ptEl = document.querySelector('#productTitle, h1.a-size-large');
+  var productTitle = ptEl ? ptEl.textContent.trim() : 'ASIN: ' + asin;
+
+  /* まず現在ページのレビューを取得して総ページ数を確認 */
+  var allReviews = parseReviews(document);
+  upsertProgress(1, 0, allReviews.length);
+
+  /* 総ページ数を推定 */
+  function estimateTotalPages() {
+    var max = 1;
+    document.querySelectorAll('.a-pagination li').forEach(function(li) {
+      var n = parseInt(li.textContent.trim());
+      if (!isNaN(n) && n > max) max = n;
+    });
+    if (max > 1) return max;
+    var t = document.body.innerText.match(/(\d+)\s*件のカスタマーレビュー/);
+    if (t) return Math.ceil(parseInt(t[1]) / 10);
+    var t2 = document.body.innerText.match(/(\d[\d,]*)\s*件の評価/);
+    if (t2) return Math.ceil(parseInt(t2[1].replace(/,/g,'')) / 10);
+    return 10; /* 不明なら10ページ試みる */
+  }
+
+  var totalPages = estimateTotalPages();
+  upsertProgress(1, totalPages, allReviews.length);
+
+  /* ページ2以降をfetchで取得 */
+  function fetchPage(page) {
+    if (!window._bhlAmzRunning) return;
+    if (page > totalPages + 2) {
+      finish();
+      return;
+    }
+    fetch(baseUrl + page, { credentials: 'include' })
+      .then(function(res) { return res.text(); })
+      .then(function(html) {
+        if (!window._bhlAmzRunning) return;
+        var parser = new DOMParser();
+        var doc = parser.parseFromString(html, 'text/html');
+        var pageRevs = parseReviews(doc);
+        if (pageRevs.length === 0) {
+          finish();
+          return;
+        }
+        allReviews = allReviews.concat(pageRevs);
+        upsertProgress(page, totalPages, allReviews.length);
+        /* 300ms 待って次ページ */
+        setTimeout(function() { fetchPage(page + 1); }, 300);
+      })
+      .catch(function() {
+        /* fetchエラー → 完了扱い */
+        finish();
+      });
+  }
+
+  function finish() {
+    window._bhlAmzRunning = false;
+    showPanel(allReviews, allReviews.length > 0 ? Math.ceil(allReviews.length / 10) : 1, productTitle);
     playDone();
+    var vc = allReviews.filter(function(r){return r.vine;}).length;
     setTimeout(function() {
-      var vc = stored.reviews.filter(function(r){return r.vine;}).length;
-      alert('✅ レビュー取得完了！\n\n合計 ' + stored.reviews.length + ' 件（' + stored.pages + 'ページ）\nうち Amazon Vine: ' + vc + ' 件\n\n「📥 CSV」でダウンロードしてClaudeにアップロードしてください。');
+      alert('✅ レビュー取得完了！\n\n合計 ' + allReviews.length + ' 件\nうち Amazon Vine: ' + vc + ' 件\n\n「📥 CSV」でダウンロードしてClaudeにアップロードしてください。');
     }, 500);
+  }
+
+  /* ページ2から開始 */
+  if (totalPages >= 2) {
+    fetchPage(2);
+  } else {
+    finish();
   }
 
 })();
