@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Amazon レビューチェックツール — bh life</title>
+<style>
+  :root {
+    --bg: #0F172A;
+    --surface: #1E2D45;
+    --surface2: #162032;
+    --border: #1E3A5F;
+    --text: #E2E8F0;
+    --muted: #64748B;
+    --accent: #FF9900;
+    --green: #22C55E;
+    --red: #FF4B4B;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    min-height: 100vh;
+    padding: 40px 20px 60px;
+  }
+
+  .container { max-width: 700px; margin: 0 auto; }
+
+  /* ヘッダー */
+  .header {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    margin-bottom: 40px;
+  }
+  .logo {
+    width: 52px; height: 52px;
+    background: var(--accent);
+    border-radius: 12px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 26px;
+  }
+  .header h1 { font-size: 22px; font-weight: 700; color: #fff; }
+  .header p  { font-size: 13px; color: var(--muted); margin-top: 3px; }
+
+  /* セクション */
+  .section {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 24px;
+    margin-bottom: 20px;
+  }
+  .section-title {
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .08em;
+    color: var(--muted);
+    margin-bottom: 16px;
+  }
+
+  /* ブックマークレットボタン */
+  .bm-btn {
+    display: inline-block;
+    background: var(--accent);
+    color: #000;
+    font-size: 14px;
+    font-weight: 700;
+    padding: 12px 24px;
+    border-radius: 8px;
+    text-decoration: none;
+    cursor: grab;
+    user-select: none;
+    transition: transform .15s, box-shadow .15s;
+    box-shadow: 0 4px 14px rgba(255,153,0,.35);
+  }
+  .bm-btn:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(255,153,0,.5); }
+  .bm-btn:active { cursor: grabbing; }
+
+  .bm-area {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    flex-wrap: wrap;
+    margin-bottom: 12px;
+  }
+
+  /* コードボックス */
+  .code-box {
+    background: #0A0F1A;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px 14px;
+    font-family: "SFMono-Regular", Consolas, monospace;
+    font-size: 11px;
+    color: #94A3B8;
+    word-break: break-all;
+    line-height: 1.6;
+    margin-bottom: 10px;
+    max-height: 80px;
+    overflow-y: auto;
+  }
+
+  /* コピーボタン */
+  .copy-btn {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 8px 18px;
+    border-radius: 6px;
+    font-size: 13px;
+    cursor: pointer;
+    transition: background .15s;
+  }
+  .copy-btn:hover { background: #1E3A5F; }
+  .copy-btn.copied { background: #14532D; color: var(--green); border-color: var(--green); }
+
+  /* ステップリスト */
+  .steps { counter-reset: step; }
+  .step {
+    display: flex;
+    gap: 14px;
+    margin-bottom: 14px;
+    align-items: flex-start;
+  }
+  .step-num {
+    counter-increment: step;
+    background: var(--accent);
+    color: #000;
+    font-weight: 700;
+    font-size: 12px;
+    min-width: 24px; height: 24px;
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+    margin-top: 1px;
+  }
+  .step-text { font-size: 13px; line-height: 1.7; color: #CBD5E1; }
+  .step-text strong { color: #fff; }
+
+  /* 機能バッジ */
+  .badges { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+  .badge {
+    padding: 5px 12px;
+    border-radius: 20px;
+    font-size: 12px;
+    font-weight: 600;
+  }
+  .badge-green  { background: #14532D; color: var(--green); }
+  .badge-red    { background: #2D1515; color: var(--red); }
+  .badge-orange { background: #431407; color: var(--accent); }
+  .badge-gray   { background: #1E293B; color: #94A3B8; }
+
+  /* 注意事項 */
+  .note {
+    background: #1C1A0A;
+    border: 1px solid #4B3800;
+    border-radius: 8px;
+    padding: 12px 14px;
+    font-size: 12px;
+    color: #D97706;
+    line-height: 1.7;
+    margin-top: 12px;
+  }
+  .note strong { color: var(--accent); }
+
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  .divider { border: none; border-top: 1px solid var(--border); margin: 6px 0 14px; }
+</style>
+</head>
+<body>
+<div class="container">
+
+  <!-- ヘッダー -->
+  <div class="header">
+    <div class="logo">★</div>
+    <div>
+      <h1>Amazon レビューチェックツール</h1>
+      <p>bh life — ネガポジ分類・課題抽出</p>
+    </div>
+  </div>
+
+  <!-- ブックマークレット設置 -->
+  <div class="section">
+    <div class="section-title">① ブックマークレットを設置</div>
+
+    <div class="bm-area">
+      <a class="bm-btn" id="bm-link" href="javascript:void(0)">
+        ★ Amazonレビュー取得
+      </a>
+      <div style="font-size:12px;color:var(--muted);line-height:1.7">
+        ← このボタンをChromeの<br>ブックマークバーにドラッグ
+      </div>
+    </div>
+
+    <hr class="divider">
+
+    <div style="font-size:12px;color:var(--muted);margin-bottom:8px">ドラッグできない場合は下のコードをコピーしてブックマークのURLに貼り付け</div>
+    <div class="code-box" id="bm-code">読み込み中...</div>
+    <button class="copy-btn" id="copy-btn">コードをコピー</button>
+
+    <div class="note">
+      <strong>手動でブックマークを追加する方法：</strong><br>
+      Chromeのブックマークバーを右クリック → 「ページを追加」<br>
+      名前：<code>★ Amazonレビュー取得</code>　URL：上のコードを貼り付け
+    </div>
+  </div>
+
+  <!-- 使い方 -->
+  <div class="section">
+    <div class="section-title">② 使い方</div>
+    <div class="steps">
+      <div class="step">
+        <div class="step-num">1</div>
+        <div class="step-text">Amazonの<strong>商品ページ</strong>（<code>amazon.co.jp/dp/ASIN</code>）または<strong>レビューページ</strong>を開く</div>
+      </div>
+      <div class="step">
+        <div class="step-num">2</div>
+        <div class="step-text">ブックマークバーの <strong>★ Amazonレビュー取得</strong> をクリック</div>
+      </div>
+      <div class="step">
+        <div class="step-num">3</div>
+        <div class="step-text">画面右上にレビューパネルが表示される。フィルターボタンで「良い / 普通 / 悪い」に絞り込み可能</div>
+      </div>
+      <div class="step">
+        <div class="step-num">4</div>
+        <div class="step-text">レビューページに移動して再クリックすると、そのページのレビューを読み込む。<strong>もう一度クリックで閉じる</strong></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 機能 -->
+  <div class="section">
+    <div class="section-title">③ 機能一覧</div>
+    <div class="badges">
+      <span class="badge badge-orange">ASIN自動取得</span>
+      <span class="badge badge-green">ポジティブ分類</span>
+      <span class="badge badge-red">ネガティブ分類</span>
+      <span class="badge badge-gray">ニュートラル分類</span>
+      <span class="badge badge-red">品質不良 検知</span>
+      <span class="badge badge-red">サイズ・仕様違い 検知</span>
+      <span class="badge badge-red">梱包・配送 検知</span>
+      <span class="badge badge-red">Amazon対応 検知</span>
+      <span class="badge badge-red">総合不満 検知</span>
+      <span class="badge badge-orange">評価別フィルター</span>
+      <span class="badge badge-gray">日付・役立ち票表示</span>
+    </div>
+    <div class="note" style="margin-top:14px">
+      <strong>注意：</strong> このツールはページに表示されているレビューを読み取ります。全件取得するにはAmazonのレビューページをページ送りして各ページで実行してください。
+    </div>
+  </div>
+
+  <!-- リンク -->
+  <div style="text-align:center;font-size:12px;color:var(--muted)">
+    <a href="https://m-mode.github.io/rakuten-dashboard/" target="_blank">楽天ダッシュボード</a>　|　
+    <a href="https://m-mode.github.io/" target="_blank">m-mode GitHub Pages</a>
+  </div>
+
+</div>
+
+<script>
+(function () {
+  // ブックマークレット用コードを動的生成（GitHub Pagesのjsを読み込む1行）
+  var jsUrl = 'https://m-mode.github.io/amazon-review-tool/amazon-review-tool.js';
+  var code = 'javascript:(function(){var s=document.createElement(\'script\');s.src=\'' + jsUrl + '?t=\'+Date.now();document.head.appendChild(s);})();';
+
+  // ボタンのhref
+  document.getElementById('bm-link').href = code;
+  document.getElementById('bm-code').textContent = code;
+
+  // コピー
+  document.getElementById('copy-btn').addEventListener('click', function () {
+    navigator.clipboard.writeText(code).then(function () {
+      var btn = document.getElementById('copy-btn');
+      btn.textContent = '✓ コピーしました';
+      btn.classList.add('copied');
+      setTimeout(function () {
+        btn.textContent = 'コードをコピー';
+        btn.classList.remove('copied');
+      }, 2000);
+    });
+  });
+})();
+</script>
+</body>
+</html>
