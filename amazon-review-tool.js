@@ -1,10 +1,9 @@
-/* Amazon レビュー取得ツール v8.3 — bh life
- * フォーム隠しフィールドからnextPageToken取得
+/* Amazon レビュー取得ツール v8.4 — bh life
+ * HTML全体スキャンでnextPageTokenを確実に取得
  */
 (function () {
   'use strict';
 
-  /* ── ASIN ── */
   var url = location.href, asin = null, m;
   m = url.match(/\/dp\/([A-Z0-9]{10})/i);            if (m) asin = m[1].toUpperCase();
   if (!asin) { m = url.match(/\/gp\/product\/([A-Z0-9]{10})/i);    if (m) asin = m[1].toUpperCase(); }
@@ -21,102 +20,116 @@
     alert('取得を中断しました'); return;
   }
 
-  /* ── 評価：CSSクラス優先 ── */
+  /* ── 評価 ── */
   function parseRating(el) {
-    var starEl = el.querySelector('i[data-hook="review-star-rating"]')
-               || el.querySelector('span[data-hook="review-star-rating"]')
-               || el.querySelector('[data-hook="cmps-review-star-rating"]');
-    if (starEl) { var cm=(starEl.className||'').match(/\ba-star-(\d+)\b/); if(cm) return parseInt(cm[1]); }
-    var altEl = el.querySelector('[data-hook*="star-rating"] .a-icon-alt');
-    if (altEl) {
-      var t=altEl.textContent||'';
-      var m1=t.match(/のうち\s*(\d+(?:\.\d+)?)/); if(m1) return parseFloat(m1[1]);
-      var m2=t.match(/^(\d+(?:\.\d+)?)\s*out/);   if(m2) return parseFloat(m2[1]);
-    }
+    var s = el.querySelector('i[data-hook="review-star-rating"]')||el.querySelector('span[data-hook="review-star-rating"]')||el.querySelector('[data-hook="cmps-review-star-rating"]');
+    if (s) { var c=(s.className||'').match(/\ba-star-(\d+)\b/); if(c) return parseInt(c[1]); }
+    var a = el.querySelector('[data-hook*="star-rating"] .a-icon-alt');
+    if (a) { var t=a.textContent||''; var m1=t.match(/のうち\s*(\d+(?:\.\d+)?)/);if(m1)return parseFloat(m1[1]); var m2=t.match(/^(\d+(?:\.\d+)?)\s*out/);if(m2)return parseFloat(m2[1]); }
     return 0;
   }
 
   /* ── タイトル ── */
   function parseTitle(el) {
-    if (!el) return '';
-    var c = el.cloneNode(true);
-    c.querySelectorAll('.a-icon-alt,i.a-icon').forEach(function(n){ n.parentNode&&n.parentNode.removeChild(n); });
+    if(!el)return''; var c=el.cloneNode(true);
+    c.querySelectorAll('.a-icon-alt,i.a-icon').forEach(function(n){n.parentNode&&n.parentNode.removeChild(n);});
     return c.textContent.replace(/\s+/g,' ').trim();
   }
 
-  /* ── Vine：「Amazonで購入」がない = Vine ── */
-  function isVine(el) {
-    var t = el.textContent||'';
-    return t.indexOf('Amazonで購入') < 0 && t.indexOf('Verified Purchase') < 0;
-  }
+  /* ── Vine ── */
+  function isVine(el) { var t=el.textContent||''; return t.indexOf('Amazonで購入')<0&&t.indexOf('Verified Purchase')<0; }
 
   /* ── 日付 ── */
-  var MO={January:'01',February:'02',March:'03',April:'04',May:'05',June:'06',
-          July:'07',August:'08',September:'09',October:'10',November:'11',December:'12'};
+  var MO={January:'01',February:'02',March:'03',April:'04',May:'05',June:'06',July:'07',August:'08',September:'09',October:'10',November:'11',December:'12'};
   function cleanDate(raw) {
-    var j=raw.match(/(\d{4})年\s*(\d{1,2})月\s*(\d{1,2})日/);
-    if(j) return j[1]+'/'+('0'+j[2]).slice(-2)+'/'+('0'+j[3]).slice(-2);
-    var e=raw.match(/(\w+)\s+(\d+),\s+(\d{4})/);
-    if(e&&MO[e[1]]) return e[3]+'/'+MO[e[1]]+'/'+('0'+e[2]).slice(-2);
+    var j=raw.match(/(\d{4})年\s*(\d{1,2})月\s*(\d{1,2})日/); if(j)return j[1]+'/'+('0'+j[2]).slice(-2)+'/'+('0'+j[3]).slice(-2);
+    var e=raw.match(/(\w+)\s+(\d+),\s+(\d{4})/); if(e&&MO[e[1]])return e[3]+'/'+MO[e[1]]+'/'+('0'+e[2]).slice(-2);
     return raw.replace(/に日本でレビュー済み.*/,'').trim();
   }
-  function toYM(d){ var m=d.match(/^(\d{4})\/(\d{2})/); return m?m[1]+'/'+m[2]:null; }
+  function toYM(d){var m=d.match(/^(\d{4})\/(\d{2})/);return m?m[1]+'/'+m[2]:null;}
 
   /* ── 重複チェック ── */
   var _seen={};
-  function rKey(el,title,date){ var id=el.id||''; return (id&&id.length>3)?'id:'+id:'td:'+(title+'|'+date).slice(0,80); }
+  function rKey(el,t,d){var id=el.id||'';return(id&&id.length>3)?'id:'+id:'td:'+(t+'|'+d).slice(0,80);}
 
   /* ── レビューパース ── */
   function parseReviews(doc) {
     var rv=[];
     doc.querySelectorAll('[data-hook="review"]').forEach(function(el){
-      var rating=parseRating(el);
-      var title=parseTitle(el.querySelector('[data-hook="review-title"]'));
-      var bEl=el.querySelector('[data-hook="review-body"] span');
-      var body=bEl?bEl.textContent.trim():'';
-      var dEl=el.querySelector('[data-hook="review-date"]');
-      var date=cleanDate(dEl?dEl.textContent.trim():'');
-      var vine=isVine(el);
-      var key=rKey(el,title,date);
+      var rating=parseRating(el), title=parseTitle(el.querySelector('[data-hook="review-title"]'));
+      var bEl=el.querySelector('[data-hook="review-body"] span'), body=bEl?bEl.textContent.trim():'';
+      var dEl=el.querySelector('[data-hook="review-date"]'), date=cleanDate(dEl?dEl.textContent.trim():'');
+      var vine=isVine(el), key=rKey(el,title,date);
       if(_seen[key])return; _seen[key]=true;
-      if(body||title) rv.push({rating:rating,title:title,body:body,date:date,vine:vine});
+      if(body||title)rv.push({rating:rating,title:title,body:body,date:date,vine:vine});
     });
     return rv;
   }
 
-  /* ── 次ページURL取得（4段階フォールバック） ── */
-  function getNextUrl(doc) {
-    /* 1: 標準ページネーションリンク */
-    var el = doc.querySelector('.a-pagination .a-last:not(.a-disabled) a')
-            || doc.querySelector('li.a-last:not(.a-disabled) a');
-    if (el) { var h=el.getAttribute('href')||''; if(h) return h.startsWith('/')?'https://www.amazon.co.jp'+h:h; }
-
-    /* 2: nextPageToken を持つ任意のリンク */
-    var tl=doc.querySelectorAll('a[href*="nextPageToken"]');
-    if(tl.length){ var h2=tl[tl.length-1].getAttribute('href')||''; if(h2) return h2.startsWith('/')?'https://www.amazon.co.jp'+h2:h2; }
-
-    /* 3: フォームの隠しフィールドから nextPageToken を取得（「さらに表示」ボタン方式） */
-    var forms=doc.querySelectorAll('form');
-    for(var fi=0;fi<forms.length;fi++){
+  /* ── nextPageTokenとpageNumberをHTML全体から取得 ── */
+  function findTokenInDoc(doc) {
+    /* 方法1: aタグのhref */
+    var aLinks = doc.querySelectorAll('a[href*="nextPageToken"]');
+    if (aLinks.length) {
+      var h = aLinks[aLinks.length-1].getAttribute('href')||'';
+      var tm = h.match(/nextPageToken=([^&"'\s]+)/);
+      var pm = h.match(/pageNumber=(\d+)/);
+      if (tm) return {token: decodeURIComponent(tm[1]), page: pm?parseInt(pm[1]):2};
+    }
+    /* 方法2: フォームのhidden input */
+    var forms = doc.querySelectorAll('form');
+    for (var fi=0;fi<forms.length;fi++) {
       var tIn=forms[fi].querySelector('input[name="nextPageToken"]');
-      if(tIn&&tIn.value){
-        var pgIn=forms[fi].querySelector('input[name="pageNumber"]');
-        var pg=pgIn?pgIn.value:'2';
-        return 'https://www.amazon.co.jp/product-reviews/'+asin+'/?sortBy=recent&pageNumber='+pg+'&nextPageToken='+encodeURIComponent(tIn.value);
+      if (tIn&&tIn.value) {
+        var pIn=forms[fi].querySelector('input[name="pageNumber"]');
+        return {token: tIn.value, page: pIn?parseInt(pIn.value):2};
       }
     }
+    /* 方法3: 全要素のdata属性をスキャン */
+    var allEls = doc.querySelectorAll('*');
+    for (var ei=0;ei<allEls.length;ei++) {
+      var el = allEls[ei];
+      for (var ai=0;ai<el.attributes.length;ai++) {
+        var av = el.attributes[ai].value;
+        if (av.length < 10 || av.indexOf('nextPageToken') < 0) continue;
+        var jm = av.match(/"nextPageToken"\s*:\s*"([^"]+)"/);
+        var jp = av.match(/"pageNumber"\s*:\s*(\d+)/);
+        if (jm) return {token: jm[1], page: jp?parseInt(jp[1]):2};
+        var um = av.match(/nextPageToken=([A-Za-z0-9+%\/=]{10,})/);
+        if (um) return {token: decodeURIComponent(um[1]), page: 2};
+      }
+    }
+    /* 方法4: scriptタグをスキャン */
+    var scripts = doc.querySelectorAll('script');
+    for (var si=0;si<scripts.length;si++) {
+      var st = scripts[si].textContent||'';
+      if (st.indexOf('nextPageToken') < 0) continue;
+      var sm = st.match(/"nextPageToken"\s*:\s*"([A-Za-z0-9+\/=]{10,})"/);
+      var sp = st.match(/"pageNumber"\s*:\s*(\d+)/);
+      if (sm) return {token: sm[1], page: sp?parseInt(sp[1]):2};
+    }
+    /* 方法5: innerHTML全スキャン（最終手段） */
+    try {
+      var html = (doc.body||{innerHTML:''}).innerHTML;
+      var hm = html.match(/"nextPageToken"\s*:\s*"([A-Za-z0-9+\/=]{10,})"/);
+      var hp = html.match(/"pageNumber"\s*:\s*(\d+)/);
+      if (hm) return {token: hm[1], page: hp?parseInt(hp[1]):2};
+      /* URL形式でエンコードされているケース */
+      var hm2 = html.match(/nextPageToken%3D([A-Za-z0-9+%\/=]{10,})(?:&|"|')/);
+      if (hm2) return {token: decodeURIComponent(hm2[1]), page: 2};
+    } catch(e) {}
+    return null;
+  }
 
-    /* 4: 全リンクから現在より大きいpageNumberを探す */
-    var curM=(typeof doc.URL!=='undefined'?doc.URL:location.href).match(/pageNumber=(\d+)/);
-    var cur=curM?parseInt(curM[1]):1;
-    var best=null,bestN=cur;
-    doc.querySelectorAll('a').forEach(function(a){
-      var ah=a.getAttribute('href')||'';
-      var am=ah.match(/pageNumber=(\d+)/);
-      if(am&&parseInt(am[1])>bestN){bestN=parseInt(am[1]);best=ah;}
-    });
-    if(best) return best.startsWith('/')?'https://www.amazon.co.jp'+best:best;
-
+  function getNextUrl(doc) {
+    /* 標準ページネーションリンク */
+    var el = doc.querySelector('.a-pagination .a-last:not(.a-disabled) a')||doc.querySelector('li.a-last:not(.a-disabled) a');
+    if (el) { var h=el.getAttribute('href')||''; if(h) return h.startsWith('/')?'https://www.amazon.co.jp'+h:h; }
+    /* トークンを取得してURL構築 */
+    var found = findTokenInDoc(doc);
+    if (found && found.token) {
+      return 'https://www.amazon.co.jp/product-reviews/'+asin+'/?sortBy=recent&pageNumber='+found.page+'&nextPageToken='+encodeURIComponent(found.token);
+    }
     return null;
   }
 
@@ -177,8 +190,7 @@
     }).join('');
     var panel=document.createElement('div');panel.id='_bhl_amz_panel';
     panel.style.cssText='position:fixed;top:16px;right:16px;z-index:2147483647;width:480px;max-height:90vh;overflow-y:auto;background:#0F172A;color:#E2E8F0;border-radius:12px;box-shadow:0 8px 32px rgba(0,0,0,.7);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;font-size:13px;line-height:1.5';
-    panel.innerHTML=
-      '<div style="background:#1E3A5F;padding:14px 16px;border-radius:12px 12px 0 0;display:flex;align-items:center;gap:10px"><div style="background:#FF9900;border-radius:50%;width:32px;height:32px;display:flex;align-items:center;justify-content:center;font-size:17px;flex-shrink:0">★</div><div style="flex:1;min-width:0"><div style="font-weight:700;font-size:14px;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+productTitle+'</div><div style="font-size:11px;color:#94A3B8;margin-top:2px">ASIN: '+asin+'　<span style="color:#FF9900">'+reviews.length+'件取得</span></div></div><button onclick="document.getElementById(\'_bhl_amz_panel\').remove()" style="background:none;border:none;color:#94A3B8;font-size:22px;cursor:pointer;padding:0 0 0 8px;line-height:1">&times;</button></div>'
+    panel.innerHTML='<div style="background:#1E3A5F;padding:14px 16px;border-radius:12px 12px 0 0;display:flex;align-items:center;gap:10px"><div style="background:#FF9900;border-radius:50%;width:32px;height:32px;display:flex;align-items:center;justify-content:center;font-size:17px;flex-shrink:0">★</div><div style="flex:1;min-width:0"><div style="font-weight:700;font-size:14px;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+productTitle+'</div><div style="font-size:11px;color:#94A3B8;margin-top:2px">ASIN: '+asin+'　<span style="color:#FF9900">'+reviews.length+'件取得</span></div></div><button onclick="document.getElementById(\'_bhl_amz_panel\').remove()" style="background:none;border:none;color:#94A3B8;font-size:22px;cursor:pointer;padding:0 0 0 8px;line-height:1">&times;</button></div>'
       +'<div style="display:flex;align-items:center;justify-content:center;gap:20px;padding:12px 16px;background:#162032;border-bottom:1px solid #1E3A5F"><div style="text-align:center"><div style="font-size:28px;font-weight:700;color:#FF9900">'+aAll+'</div><div style="font-size:11px;color:#64748B">★ 全体平均</div></div><div style="width:1px;height:40px;background:#1E3A5F"></div><div style="text-align:center"><div style="font-size:28px;font-weight:700;color:#fff">'+reviews.length+'</div><div style="font-size:11px;color:#64748B">件取得</div></div><div style="width:1px;height:40px;background:#1E3A5F"></div><div style="text-align:center"><div style="font-size:20px;font-weight:700;color:#C4B5FD">'+vC+'<span style="font-size:12px;color:#64748B"> Vine</span></div><div style="font-size:11px;color:#64748B">'+vP+'%</div></div><div style="text-align:center"><div style="font-size:20px;font-weight:700;color:#67E8F9">'+nvC+'<span style="font-size:12px;color:#64748B"> 非Vine</span></div><div style="font-size:11px;color:#64748B">'+(100-vP)+'%</div></div></div>'
       +monthChart(reviews)
       +'<div style="padding:14px 16px;background:#162032;border-bottom:1px solid #1E3A5F">'+distChart(reviews,'■ 全体','#FF9900')+distChart(vRv,'■ Vine（Amazonで購入なし）','#C4B5FD')+distChart(nvRv,'■ 非Vine（Amazonで購入）','#67E8F9')+'</div>'
