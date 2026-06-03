@@ -267,9 +267,9 @@
         var next=getNextUrl(doc,curPageNum);
         var nextKey=next?(next.replace(/[?&]t=\d+/,'')):null;
         if(next&&nextKey&&!_fetchedUrls[nextKey]){
-          setTimeout(function(){fetchByUrl(next,curPageNum+1);},300);
+          setTimeout(function(){fetchByUrl(next,curPageNum+1);},800);
         } else {
-          setTimeout(function(){fetchByUrl(buildPageUrl(curPageNum+1),curPageNum+1);},300);
+          setTimeout(function(){fetchByUrl(buildPageUrl(curPageNum+1),curPageNum+1);},800);
         }
       }).catch(function(){finish();});
   }
