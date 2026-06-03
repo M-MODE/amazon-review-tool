@@ -196,42 +196,60 @@
   var ptEl=document.querySelector('#productTitle,h1.a-size-large');
   var productTitle=ptEl?ptEl.textContent.trim():'ASIN: '+asin;
   var pageCount=1;
-  var consecutiveEmpty=0; /* 連続で新規0件のページ数 */
+  var _fetchedUrls={};  /* 取得済みURLの記録 */
   upsertProg(pageCount,allReviews.length);
 
-  function fetchByUrl(nextUrl,fallbackPage){
+  function buildPageUrl(pg){
+    return 'https://www.amazon.co.jp/product-reviews/'+asin+'/?sortBy=recent&pageNumber='+pg;
+  }
+
+  function fetchByUrl(nextUrl,curPageNum){
     if(!window._bhlAmzRunning){finish();return;}
-    if(!nextUrl){
-      /* nextUrlがない場合はページ番号方式にフォールバック */
-      nextUrl='https://www.amazon.co.jp/product-reviews/'+asin+'/?sortBy=recent&pageNumber='+(fallbackPage||2);
+
+    /* 同じURLを再取得しないようにチェック */
+    var urlKey=(nextUrl||'').replace(/[?&]t=\d+/,'');
+    if(_fetchedUrls[urlKey]){
+      /* 既に取得済み → ページ番号を1増やして試みる */
+      var pg=curPageNum+1;
+      nextUrl=buildPageUrl(pg);
+      urlKey=nextUrl;
+      curPageNum=pg;
     }
+    _fetchedUrls[urlKey]=true;
+
     fetch(nextUrl,{credentials:'include'})
       .then(function(res){return res.text();})
       .then(function(html){
         if(!window._bhlAmzRunning)return;
         var doc=(new DOMParser()).parseFromString(html,'text/html');
         var revs=parseReviews(doc);
-        pageCount++;allReviews=allReviews.concat(revs);
+        pageCount++;
+        allReviews=allReviews.concat(revs);
         upsertProg(pageCount,allReviews.length);
 
-        if(revs.length===0){
-          consecutiveEmpty++;
-          /* 3ページ連続で新規0件なら終了 */
-          if(consecutiveEmpty>=3){finish();return;}
-        } else {
-          consecutiveEmpty=0;
-        }
-
         var next=getNextUrl(doc);
-        /* nextが見つからない場合でも、新規レビューがあれば次ページ番号で試みる */
-        if(!next&&revs.length>0){
-          var pgM=nextUrl.match(/pageNumber=(\d+)/);
-          var pg=pgM?parseInt(pgM[1])+1:pageCount+1;
-          next='https://www.amazon.co.jp/product-reviews/'+asin+'/?sortBy=recent&pageNumber='+pg;
+
+        /* nextが見つかった場合：そのURLを使用 */
+        if(next&&!_fetchedUrls[next.replace(/[?&]t=\d+/,'')]){
+          setTimeout(function(){fetchByUrl(next,curPageNum+1);},300);
+          return;
         }
 
-        if(next){setTimeout(function(){fetchByUrl(next,pageCount+1);},300);}
-        else{finish();}
+        /* nextが見つからない or 取得済み → ページ番号方式で続行 */
+        if(revs.length>0){
+          /* 新規レビューが取れた → 次のページ番号で続行 */
+          setTimeout(function(){fetchByUrl(buildPageUrl(curPageNum+1),curPageNum+1);},300);
+        } else {
+          /* 3ページ連続で新規0件かチェック（ページ番号方式の場合) */
+          var pg2=curPageNum+1;
+          var pg3=curPageNum+2;
+          if(_fetchedUrls[buildPageUrl(pg2)]&&_fetchedUrls[buildPageUrl(pg3)]){
+            finish(); /* 連続して新規0件 → 終了 */
+          } else {
+            /* もう少し試みる */
+            setTimeout(function(){fetchByUrl(buildPageUrl(pg2),pg2);},300);
+          }
+        }
       }).catch(function(){finish();});
   }
 
@@ -243,7 +261,7 @@
   }
 
   var firstNext=getNextUrl(document);
-  fetchByUrl(firstNext,2);
+  fetchByUrl(firstNext||buildPageUrl(2),2);
 
   } /* end runTool */
 
