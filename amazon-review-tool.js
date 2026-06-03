@@ -261,6 +261,29 @@
   var _fetchedUrls = {};
   upsertProg(pageCount, allReviews.length);
 
+  /* ── iframeでページを読み込む（JSを実行してトークン取得） ── */
+  function loadPage(url, callback) {
+    var iframe = document.createElement('iframe');
+    iframe.style.cssText = 'position:fixed;top:-3000px;left:-3000px;width:1200px;height:900px;visibility:hidden;pointer-events:none';
+    iframe.src = url;
+    var tid = setTimeout(function(){ cleanup(); callback(null); }, 20000);
+    function cleanup(){
+      clearTimeout(tid);
+      try{ document.body.removeChild(iframe); }catch(e){}
+    }
+    iframe.onload = function(){
+      /* JSが実行されるまで少し待つ */
+      setTimeout(function(){
+        try{
+          var doc = iframe.contentDocument || (iframe.contentWindow && iframe.contentWindow.document);
+          callback(doc);
+        }catch(e){ callback(null); }
+        cleanup();
+      }, 1500);
+    };
+    document.body.appendChild(iframe);
+  }
+
   function buildFilterUrl(filter, pg){
     var base = 'https://www.amazon.co.jp/product-reviews/'+asin+'/?sortBy=recent';
     if(filter) base += '&filterByStar='+filter;
@@ -275,25 +298,21 @@
     emptyCount = 0;
     var url = buildFilterUrl(STAR_FILTERS[filterIndex], 1);
     upsertProg(pageCount, allReviews.length);
-    fetch(url, {credentials:'include'})
-      .then(function(res){ return res.text(); })
-      .then(function(html){
-        if(!window._bhlAmzRunning) return;
-        var doc = (new DOMParser()).parseFromString(html, 'text/html');
-        var revs = parseReviews(doc);
-        pageCount++;
-        allReviews = allReviews.concat(revs);
-        upsertProg(pageCount, allReviews.length);
-        if(revs.length > 0){ emptyCount = 0; }
-        else { emptyCount++; }
-        var next = getNextUrl(doc, 1);
-        if(next && !_fetchedUrls[next]){
-          _fetchedUrls[next] = true;
-          setTimeout(function(){ fetchByUrl(next, 2); }, 800);
-        } else {
-          setTimeout(function(){ nextFilter(); }, 500);
-        }
-      }).catch(function(){ setTimeout(function(){ nextFilter(); }, 500); });
+    loadPage(url, function(doc){
+      if(!doc||!window._bhlAmzRunning){ setTimeout(function(){ nextFilter(); }, 500); return; }
+      var revs = parseReviews(doc);
+      pageCount++;
+      allReviews = allReviews.concat(revs);
+      upsertProg(pageCount, allReviews.length);
+      if(revs.length > 0){ emptyCount = 0; } else { emptyCount++; }
+      var next = getNextUrl(doc, 1);
+      if(next && !_fetchedUrls[next]){
+        _fetchedUrls[next] = true;
+        setTimeout(function(){ fetchByUrl(next, 2); }, 1000);
+      } else {
+        setTimeout(function(){ nextFilter(); }, 500);
+      }
+    });
   }
 
   function fetchByUrl(nextUrl, curPageNum){
@@ -301,40 +320,32 @@
 
     var urlKey = (nextUrl||'').replace(/[?&]t=\d+/,'');
     if(_fetchedUrls[urlKey]){
-      /* 同じURL → このフィルターは終了、次のフィルターへ */
       setTimeout(function(){ nextFilter(); }, 500);
       return;
     }
     _fetchedUrls[urlKey] = true;
 
-    fetch(nextUrl, {credentials:'include'})
-      .then(function(res){ return res.text(); })
-      .then(function(html){
-        if(!window._bhlAmzRunning) return;
-        var doc = (new DOMParser()).parseFromString(html, 'text/html');
-        var revs = parseReviews(doc);
-        pageCount++;
-        allReviews = allReviews.concat(revs);
-        upsertProg(pageCount, allReviews.length);
+    loadPage(nextUrl, function(doc){
+      if(!doc||!window._bhlAmzRunning){ setTimeout(function(){ nextFilter(); }, 500); return; }
+      var revs = parseReviews(doc);
+      pageCount++;
+      allReviews = allReviews.concat(revs);
+      upsertProg(pageCount, allReviews.length);
 
-        if(revs.length > 0){ emptyCount = 0; }
-        else { emptyCount++; }
+      if(revs.length > 0){ emptyCount = 0; }
+      else { emptyCount++; }
 
-        try { sessionStorage.setItem(SESS_KEY, JSON.stringify({asin:asin, reviews:allReviews})); } catch(e) {}
+      try { sessionStorage.setItem(SESS_KEY, JSON.stringify({asin:asin, reviews:allReviews})); } catch(e) {}
 
-        var next = getNextUrl(doc, curPageNum);
-        var nextKey = next ? next.replace(/[?&]t=\d+/,'') : null;
+      var next = getNextUrl(doc, curPageNum);
+      var nextKey = next ? next.replace(/[?&]t=\d+/,'') : null;
 
-        if(next && nextKey && !_fetchedUrls[nextKey]){
-          /* 次のトークンURLへ */
-          setTimeout(function(){ fetchByUrl(next, curPageNum+1); }, 800);
-        } else if(emptyCount < 2){
-          /* 空ページが少ない → 次のフィルターへ */
-          setTimeout(function(){ nextFilter(); }, 500);
-        } else {
-          setTimeout(function(){ nextFilter(); }, 500);
-        }
-      }).catch(function(){ setTimeout(function(){ nextFilter(); }, 500); });
+      if(next && nextKey && !_fetchedUrls[nextKey]){
+        setTimeout(function(){ fetchByUrl(next, curPageNum+1); }, 1000);
+      } else {
+        setTimeout(function(){ nextFilter(); }, 500);
+      }
+    });
   }
 
   function finish(){
