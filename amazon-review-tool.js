@@ -6,7 +6,7 @@
   'use strict';
 
   /* ── Apps Script URL（楽天ツールと同じものを使用） ── */
-  var GAS_URL = 'https://script.google.com/macros/s/AKfycbyX-zgbwe6pWC5GIQpAmbK7IqTkP9QuHdzBh9j9rcVlBmJxfrEFuNVTpN8PaaJp4SQb/exec';
+  var GAS_URL = 'ここにApps ScriptのURLを貼り付け';
   var EMAIL_KEY = '_bhl_email';
 
   /* ── メール認証チェック ── */
@@ -196,10 +196,15 @@
   var ptEl=document.querySelector('#productTitle,h1.a-size-large');
   var productTitle=ptEl?ptEl.textContent.trim():'ASIN: '+asin;
   var pageCount=1;
+  var consecutiveEmpty=0; /* 連続で新規0件のページ数 */
   upsertProg(pageCount,allReviews.length);
 
-  function fetchByUrl(nextUrl){
-    if(!nextUrl||!window._bhlAmzRunning){finish();return;}
+  function fetchByUrl(nextUrl,fallbackPage){
+    if(!window._bhlAmzRunning){finish();return;}
+    if(!nextUrl){
+      /* nextUrlがない場合はページ番号方式にフォールバック */
+      nextUrl='https://www.amazon.co.jp/product-reviews/'+asin+'/?sortBy=recent&pageNumber='+(fallbackPage||2);
+    }
     fetch(nextUrl,{credentials:'include'})
       .then(function(res){return res.text();})
       .then(function(html){
@@ -208,8 +213,24 @@
         var revs=parseReviews(doc);
         pageCount++;allReviews=allReviews.concat(revs);
         upsertProg(pageCount,allReviews.length);
+
+        if(revs.length===0){
+          consecutiveEmpty++;
+          /* 3ページ連続で新規0件なら終了 */
+          if(consecutiveEmpty>=3){finish();return;}
+        } else {
+          consecutiveEmpty=0;
+        }
+
         var next=getNextUrl(doc);
-        if(next&&revs.length>0){setTimeout(function(){fetchByUrl(next);},300);}
+        /* nextが見つからない場合でも、新規レビューがあれば次ページ番号で試みる */
+        if(!next&&revs.length>0){
+          var pgM=nextUrl.match(/pageNumber=(\d+)/);
+          var pg=pgM?parseInt(pgM[1])+1:pageCount+1;
+          next='https://www.amazon.co.jp/product-reviews/'+asin+'/?sortBy=recent&pageNumber='+pg;
+        }
+
+        if(next){setTimeout(function(){fetchByUrl(next,pageCount+1);},300);}
         else{finish();}
       }).catch(function(){finish();});
   }
@@ -222,7 +243,7 @@
   }
 
   var firstNext=getNextUrl(document);
-  if(firstNext){fetchByUrl(firstNext);}else{finish();}
+  fetchByUrl(firstNext,2);
 
   } /* end runTool */
 
