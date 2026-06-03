@@ -262,12 +262,9 @@
         processDoc(doc, pg);
       })
       .catch(function(e){
-        console.warn('fetch error p'+pg, e);
-        emptyCount++;
-        if(emptyCount >= 5){ finish(); return; }
-        /* エラー時も次ページを試みる */
-        var fallback = 'https://www.amazon.co.jp/product-reviews/'+asin+'/?sortBy=recent&pageNumber='+(pg+1);
-        setTimeout(function(){ fetchPage(fallback, pg+1); }, 1500);
+        /* デバッグ：エラー内容を表示 */
+        alert('❌ fetchエラー p'+pg+'\n'+e.message+'\n\nF12→Networkタブでエラー詳細を確認してください');
+        finish();
       });
   }
 
