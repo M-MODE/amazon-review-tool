@@ -295,8 +295,9 @@
   /* フェーズ2: ★フィルター各ページをfetch */
   function runStars(){
     starIndex++;
-    if(starIndex>=STAR_FILTERS.length||!window._bhlAmzRunning){ finish(); return; }
-    var url='https://www.amazon.co.jp/product-reviews/'+asin+'/?sortBy=recent&filterByStar='+STAR_FILTERS[starIndex];
+    if(starIndex>=STAR_PHASES.length||!window._bhlAmzRunning){ finish(); return; }
+    var ph=STAR_PHASES[starIndex];
+    var url='https://www.amazon.co.jp/product-reviews/'+asin+'/?sortBy='+ph.s+'&filterByStar='+ph.f;
     upsertProg(pageCount,allReviews.length);
     fp(url,function(doc){
       if(!doc||!window._bhlAmzRunning){ setTimeout(runStars,300); return; }
