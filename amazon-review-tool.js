@@ -276,10 +276,21 @@
       setTimeout(function(){
         try{
           var doc = iframe.contentDocument || (iframe.contentWindow && iframe.contentWindow.document);
-          callback(doc);
-        }catch(e){ callback(null); }
-        cleanup();
-      }, 1500);
+          /* レビューが見つからない場合はもう少し待つ */
+          if(doc && doc.querySelectorAll('[data-hook="review"]').length === 0){
+            setTimeout(function(){
+              try{
+                var doc2 = iframe.contentDocument || (iframe.contentWindow && iframe.contentWindow.document);
+                callback(doc2);
+              }catch(e){ callback(null); }
+              cleanup();
+            }, 2000);
+          } else {
+            callback(doc);
+            cleanup();
+          }
+        }catch(e){ callback(null); cleanup(); }
+      }, 2000);
     };
     document.body.appendChild(iframe);
   }
