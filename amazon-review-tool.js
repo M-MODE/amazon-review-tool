@@ -12,7 +12,18 @@
   if (!asin) { m = url.match(/\/gp\/product\/([A-Z0-9]{10})/i);    if (m) asin = m[1].toUpperCase(); }
   if (!asin) { m = url.match(/\/product-reviews\/([A-Z0-9]{10})/i); if (m) asin = m[1].toUpperCase(); }
   if (!asin) { alert('Amazonの商品ページまたはレビューページで実行してください'); return; }
+  /* レビューページでない、またはpage1以外から実行 → page1にリダイレクト */
+  var curPageCheck = parseInt((url.match(/pageNumber=(\d+)/)||['','1'])[1])||1;
   if (url.indexOf('/product-reviews/') < 0) {
+    location.href = 'https://www.amazon.co.jp/product-reviews/' + asin + '/?sortBy=recent&pageNumber=1';
+    return;
+  }
+  /* savedStateがない状態でpage1以外から実行された場合もpage1から開始 */
+  var _hasSavedState = false;
+  try { _hasSavedState = !!localStorage.getItem(NAV_KEY + asin); } catch(e) {}
+  if (!_hasSavedState && curPageCheck > 1) {
+    /* stateをクリアしてpage1から再スタート */
+    try { localStorage.removeItem(NAV_KEY + asin); } catch(e) {}
     location.href = 'https://www.amazon.co.jp/product-reviews/' + asin + '/?sortBy=recent&pageNumber=1';
     return;
   }
