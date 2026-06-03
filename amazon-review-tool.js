@@ -172,19 +172,29 @@
   ];
   var phaseIdx = -1;
 
-  /* fetchページ取得（5秒タイムアウト） */
+  var _diagLog = [];
+  /* fetchページ取得（10秒タイムアウト、bot検知チェック付き） */
   function fp(url, cb){
     var k = url.replace(/[?&]t=\d+/g,'');
-    if(_fetched[k]){ cb(null); return; }
+    if(_fetched[k]){ _diagLog.push('SKIP:'+url.slice(-40)); cb(null); return; }
     _fetched[k] = true;
     var ctrl = typeof AbortController!=='undefined' ? new AbortController() : null;
-    var tid = ctrl ? setTimeout(function(){ ctrl.abort(); }, 5000) : null;
+    var tid = ctrl ? setTimeout(function(){ ctrl.abort(); }, 10000) : null;
     var opts = {credentials:'include'};
     if(ctrl) opts.signal = ctrl.signal;
     fetch(url, opts)
       .then(function(r){ clearTimeout(tid); return r.text(); })
-      .then(function(html){ cb((new DOMParser()).parseFromString(html,'text/html')); })
-      .catch(function(){ clearTimeout(tid); cb(null); });
+      .then(function(html){
+        var doc=(new DOMParser()).parseFromString(html,'text/html');
+        /* Amazonのbot検知ページチェック */
+        if(html.indexOf('ご迷惑をおかけしています')>=0||html.indexOf('robot')>=0){
+          _diagLog.push('BOT:'+url.slice(-30)); cb(null); return;
+        }
+        var cnt=doc.querySelectorAll('[data-hook="review"]').length;
+        _diagLog.push('OK('+cnt+'件):'+url.slice(-40));
+        cb(doc);
+      })
+      .catch(function(e){ clearTimeout(tid); _diagLog.push('ERR:'+url.slice(-30)); cb(null); });
   }
 
   /* トークンチェーン */
@@ -234,12 +244,14 @@
     showPanel(allReviews,productTitle);playDone();
     var vc=allReviews.filter(function(r){return r.vine;}).length;
     setTimeout(function(){
-      alert('✅ レビュー取得完了！\n\n合計 '+allReviews.length+' 件\n├ Vine（Amazonで購入なし）: '+vc+' 件\n└ 非Vine（Amazonで購入）: '+(allReviews.length-vc)+' 件\n\n※もう一度クリックでさらに追加取得できます');
+      var diagStr = _diagLog.slice(0,15).join('\n');
+      alert('✅ レビュー取得完了！\n\n合計 '+allReviews.length+' 件\n├ Vine（Amazonで購入なし）: '+vc+' 件\n└ 非Vine（Amazonで購入）: '+(allReviews.length-vc)+' 件\n\n【診断ログ(最初の15件)】\n'+diagStr);
     },500);
   }
 
   /* スタート：トークンチェーン → 星フィルター */
   var firstNext=getNextUrl(document,1);
+  _diagLog.push('START: live DOM='+allReviews.length+'件, token='+(firstNext?'あり':'なし'));
   if(firstNext){ runChain(firstNext,2); } else { runNextPhase(); }
 
 })();
