@@ -245,9 +245,13 @@
   }
 
   /* ── セッションストレージキー ── */
-  /* ── セッションストレージキー ── */
   var SESS_KEY = '_bhl_amz_sess_' + asin;
-  var STAR_FILTERS = ['five_star','four_star','three_star','two_star','one_star'];
+  var STAR_PHASES = [
+    {f:'five_star',s:'recent'},{f:'four_star',s:'recent'},
+    {f:'three_star',s:'recent'},{f:'two_star',s:'recent'},{f:'one_star',s:'recent'},
+    {f:'five_star',s:'helpful'},{f:'four_star',s:'helpful'},
+    {f:'three_star',s:'helpful'},{f:'two_star',s:'helpful'},{f:'one_star',s:'helpful'}
+  ];
   var starIndex = -1;
 
   var sessionData = null;
@@ -255,8 +259,7 @@
   window._bhlAmzRunning = true;
 
   if(sessionData && sessionData.asin === asin && sessionData.reviews && sessionData.reviews.length > 0){
-    _seen = {};
-    sessionData.reviews.forEach(function(r){
+    _seen = {}; sessionData.reviews.forEach(function(r){
       var key = r.rid && r.rid.length > 3 ? 'id:'+r.rid : 'bd:'+(r.body||'').slice(0,60)+'|'+r.date;
       _seen[key] = true;
     });
@@ -269,20 +272,88 @@
   var _fetched = {};
   upsertProg(pageCount, allReviews.length);
 
-  /* fetchでページ取得 */
-  function fp(url, cb){
-    var k = url.replace(/[?&]t=\d+/,'');
-    if(_fetched[k]){ cb(null); return; }
-    _fetched[k] = true;
-    fetch(url,{credentials:'include'}).then(function(r){return r.text();}).then(function(html){
-      cb((new DOMParser()).parseFromString(html,'text/html'));
+  /* ── AJAXエンドポイントで取得（トークン不要） ── */
+  function fetchAjax(pg, filter, sort, cb){
+    var body = new URLSearchParams({
+      sortBy: sort||'recent', reviewerType:'all_reviews',
+      formatType:'all_formats', mediaType:'all_contents',
+      filterByStar: filter||'all_stars', pageSize:'10',
+      pageNumber: String(pg), asin: asin,
+      scope:'reviewsAjax1', language:'ja_JP'
+    });
+    var key = asin+'|'+(filter||'all')+'|'+(sort||'recent')+'|'+pg;
+    if(_fetched[key]){ cb(null); return; }
+    _fetched[key] = true;
+    fetch('https://www.amazon.co.jp/hz/reviews-render/ajax/reviews/get',{
+      method:'POST', credentials:'include',
+      headers:{'Content-Type':'application/x-www-form-urlencoded','X-Requested-With':'XMLHttpRequest'},
+      body: body.toString()
+    }).then(function(r){return r.text();}).then(function(txt){
+      /* レスポンスはJSON文字列か生HTMLの場合がある */
+      var doc;
+      try{
+        var j=JSON.parse(txt);
+        if(j.html){ doc=(new DOMParser()).parseFromString(j.html,'text/html'); }
+        else if(j[0] && j[0].html){ doc=(new DOMParser()).parseFromString(j[0].html,'text/html'); }
+      }catch(e){}
+      if(!doc){ doc=(new DOMParser()).parseFromString(txt,'text/html'); }
+      cb(doc);
     }).catch(function(){ cb(null); });
   }
 
-  /* フェーズ1: トークンチェーン */
+  /* ── フォールバック: 通常fetch ── */
+  function fetchPage(url, cb){
+    var k = url.replace(/[?&]t=\d+/,'');
+    if(_fetched[k]){ cb(null); return; }
+    _fetched[k] = true;
+    fetch(url,{credentials:'include'}).then(function(r){return r.text();})
+      .then(function(html){ cb((new DOMParser()).parseFromString(html,'text/html')); })
+      .catch(function(){ cb(null); });
+  }
+
+  /* ── フェーズ1: AJAXで全ページ取得 ── */
+  var ajaxFailed = false;
+
+  function runAjax(pg, filter, sort, onDone){
+    if(!window._bhlAmzRunning){ onDone(); return; }
+    fetchAjax(pg, filter, sort, function(doc){
+      if(!doc||!window._bhlAmzRunning){ ajaxFailed=true; onDone(); return; }
+      var rv = parseReviews(doc);
+      if(rv.length === 0){ onDone(); return; }
+      pageCount++; allReviews = allReviews.concat(rv);
+      upsertProg(pageCount, allReviews.length);
+      setTimeout(function(){ runAjax(pg+1, filter, sort, onDone); }, 400);
+    });
+  }
+
+  /* AJAXで all_stars を全ページ取得してから星フィルターへ */
+  function startAjaxPhase(){
+    runAjax(1, 'all_stars', 'recent', function(){
+      if(!ajaxFailed){
+        /* AJAXが機能 → 星フィルターもAJAXで */
+        runAjaxStars();
+      } else {
+        /* AJAXが機能しない → 従来方式にフォールバック */
+        var firstNext = getNextUrl(document, 1);
+        if(firstNext){ runChain(firstNext, 2); } else { runStars(); }
+      }
+    });
+  }
+
+  var ajaxStarIndex = -1;
+  function runAjaxStars(){
+    ajaxStarIndex++;
+    if(ajaxStarIndex >= STAR_PHASES.length || !window._bhlAmzRunning){ finish(); return; }
+    var ph = STAR_PHASES[ajaxStarIndex];
+    runAjax(1, ph.f, ph.s, function(){
+      setTimeout(runAjaxStars, 200);
+    });
+  }
+
+  /* ── フォールバック: トークンチェーン ── */
   function runChain(url, pg){
     if(!url||!window._bhlAmzRunning){ runStars(); return; }
-    fp(url, function(doc){
+    fetchPage(url, function(doc){
       if(!doc||!window._bhlAmzRunning){ runStars(); return; }
       var rv=parseReviews(doc); pageCount++; allReviews=allReviews.concat(rv);
       upsertProg(pageCount,allReviews.length);
@@ -292,14 +363,13 @@
     });
   }
 
-  /* フェーズ2: ★フィルター各ページをfetch */
+  /* ── フォールバック: 星フィルター ── */
   function runStars(){
     starIndex++;
     if(starIndex>=STAR_PHASES.length||!window._bhlAmzRunning){ finish(); return; }
     var ph=STAR_PHASES[starIndex];
     var url='https://www.amazon.co.jp/product-reviews/'+asin+'/?sortBy='+ph.s+'&filterByStar='+ph.f;
-    upsertProg(pageCount,allReviews.length);
-    fp(url,function(doc){
+    fetchPage(url,function(doc){
       if(!doc||!window._bhlAmzRunning){ setTimeout(runStars,300); return; }
       var rv=parseReviews(doc); pageCount++; allReviews=allReviews.concat(rv);
       upsertProg(pageCount,allReviews.length);
@@ -311,7 +381,7 @@
 
   function runStarPages(url,pg){
     if(!url||!window._bhlAmzRunning){ setTimeout(runStars,300); return; }
-    fp(url,function(doc){
+    fetchPage(url,function(doc){
       if(!doc||!window._bhlAmzRunning){ setTimeout(runStars,300); return; }
       var rv=parseReviews(doc); pageCount++; allReviews=allReviews.concat(rv);
       upsertProg(pageCount,allReviews.length);
@@ -331,8 +401,10 @@
     },500);
   }
 
-  var firstNext=getNextUrl(document,1);
-  if(firstNext){ runChain(firstNext,2); } else { runStars(); }
+  /* ── スタート ── */
+  /* ページ2以降はAJAXエンドポイントで取得を試みる */
+  /* ページ1は既にlive DOMから取得済み */
+  startAjaxPhase();
 
   } /* end runTool */
 
