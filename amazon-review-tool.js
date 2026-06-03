@@ -24,6 +24,12 @@
   if (!asin){ m = url.match(/\/product-reviews\/([A-Z0-9]{10})/i); if (m) asin = m[1].toUpperCase(); }
   if (!asin){ alert('Amazonの商品ページまたはレビューページで実行してください'); return; }
 
+  /* ── 商品ページならレビューページへ誘導して終了 ── */
+  if (url.indexOf('/product-reviews/') < 0) {
+    location.href = 'https://www.amazon.co.jp/product-reviews/' + asin + '/?sortBy=recent&pageNumber=1';
+    return;
+  }
+
   /* ── 商品タイトル取得 ── */
   var ptEl = document.querySelector('#productTitle')
           || document.querySelector('[data-hook="product-link"]')
@@ -224,7 +230,17 @@
 
   showProg(1, 0);
 
-  /* まず現在のページを処理（すでにレビューページなら直接使う） */
+  /* ページ1：現在のDOMを直接使う（fetchより確実） */
+  var p1revs = parseReviews(document);
+  allReviews = p1revs;
+  showProg(1, allReviews.length);
+  var p1next = getNextUrl(document, 1);
+  if (!p1next) {
+    finish();
+  } else {
+    setTimeout(function(){ fetchPage(p1next, 2); }, 800);
+  }
+
   function processDoc(doc, pg){
     if(!window._bhlAmzRunning) return;
     var revs = parseReviews(doc);
@@ -280,6 +296,6 @@
   }
 
   /* 開始：ページ1をfetch */
-  fetchPage(page1url, 1);
+  /* page1はDOM直接取得済み、上部で処理 */
 
 })();
