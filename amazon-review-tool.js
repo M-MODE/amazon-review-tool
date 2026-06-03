@@ -129,13 +129,20 @@
   try { savedState = JSON.parse(localStorage.getItem(stateKey)||'null'); } catch(e) {}
 
   /* 既存の取得データがある場合：追加取得モード */
+  var curPageInUrl = parseInt((location.href.match(/pageNumber=(\d+)/)||['','1'])[1])||1;
+  /* ページ1に戻っている場合は状態をクリアしてやり直し */
+  if (savedState && savedState.asin === asin && curPageInUrl <= savedState.pageNum) {
+    try { localStorage.removeItem(stateKey); } catch(e) {}
+    savedState = null;
+  }
+
   if (savedState && savedState.asin === asin) {
     _seen = {};
     savedState.reviews.forEach(function(r){ markSeen(r); });
 
     var newRevs = parseReviews(document);
     var allRevs = savedState.reviews.concat(newRevs);
-    var pageNum = (savedState.pageNum||1) + 1;
+    var pageNum = curPageInUrl;
     var nextUrl = getNextUrl(document, pageNum);
 
     if (nextUrl && newRevs.length > 0) {
