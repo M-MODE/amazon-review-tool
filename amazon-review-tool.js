@@ -232,7 +232,8 @@
   var ptEl=document.querySelector('#productTitle,h1.a-size-large');
   var productTitle=ptEl?ptEl.textContent.trim():'ASIN: '+asin;
   var pageCount=1;
-  var _fetchedUrls={};  /* 取得済みURLの記録 */
+  var lastProductivePage=1;
+  var _fetchedUrls={};
   upsertProg(pageCount,allReviews.length);
 
   function buildPageUrl(pg){
@@ -241,15 +242,14 @@
 
   function fetchByUrl(nextUrl,curPageNum){
     if(!window._bhlAmzRunning){finish();return;}
+    /* 最後に新規取得できたページから5ページ超えたら終了 */
+    if(curPageNum - lastProductivePage >= 5){finish();return;}
 
-    /* 同じURLを再取得しないようにチェック */
     var urlKey=(nextUrl||'').replace(/[?&]t=\d+/,'');
     if(_fetchedUrls[urlKey]){
-      /* 既に取得済み → ページ番号を1増やして試みる */
-      var pg=curPageNum+1;
-      nextUrl=buildPageUrl(pg);
+      curPageNum=curPageNum+1;
+      nextUrl=buildPageUrl(curPageNum);
       urlKey=nextUrl;
-      curPageNum=pg;
     }
     _fetchedUrls[urlKey]=true;
 
@@ -262,29 +262,14 @@
         pageCount++;
         allReviews=allReviews.concat(revs);
         upsertProg(pageCount,allReviews.length);
+        if(revs.length>0) lastProductivePage=curPageNum;
 
-        var next=getNextUrl(doc, curPageNum);
-
-        /* nextが見つかった場合：そのURLを使用 */
-        if(next&&!_fetchedUrls[next.replace(/[?&]t=\d+/,'')]){
+        var next=getNextUrl(doc,curPageNum);
+        var nextKey=next?(next.replace(/[?&]t=\d+/,'')):null;
+        if(next&&nextKey&&!_fetchedUrls[nextKey]){
           setTimeout(function(){fetchByUrl(next,curPageNum+1);},300);
-          return;
-        }
-
-        /* nextが見つからない or 取得済み → ページ番号方式で続行 */
-        if(revs.length>0){
-          /* 新規レビューが取れた → 次のページ番号で続行 */
-          setTimeout(function(){fetchByUrl(buildPageUrl(curPageNum+1),curPageNum+1);},300);
         } else {
-          /* 3ページ連続で新規0件かチェック（ページ番号方式の場合) */
-          var pg2=curPageNum+1;
-          var pg3=curPageNum+2;
-          if(_fetchedUrls[buildPageUrl(pg2)]&&_fetchedUrls[buildPageUrl(pg3)]){
-            finish(); /* 連続して新規0件 → 終了 */
-          } else {
-            /* もう少し試みる */
-            setTimeout(function(){fetchByUrl(buildPageUrl(pg2),pg2);},300);
-          }
+          setTimeout(function(){fetchByUrl(buildPageUrl(curPageNum+1),curPageNum+1);},300);
         }
       }).catch(function(){finish();});
   }
@@ -296,7 +281,7 @@
     setTimeout(function(){alert('✅ レビュー取得完了！\n\n合計 '+allReviews.length+' 件\n├ Vine（Amazonで購入なし）: '+vc+' 件\n└ 非Vine（Amazonで購入）: '+(allReviews.length-vc)+' 件');},500);
   }
 
-  var firstNext=getNextUrl(document);
+  var firstNext=getNextUrl(document,1);
   fetchByUrl(firstNext||buildPageUrl(2),2);
 
   } /* end runTool */
