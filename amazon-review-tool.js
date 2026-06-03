@@ -65,12 +65,12 @@
   }
   function getNextUrl(doc,cur){
     cur=cur||1;
-    /* 優先1: nextPageToken付きリンク（numbered pagination with token） */
+    /* 優先1: nextPageToken付きリンク */
     var el=doc.querySelector('.a-pagination .a-last a')||doc.querySelector('li.a-last a');
     if(el){var h=el.getAttribute('href')||'';var pg=h.match(/pageNumber=(\d+)/);
       if(h&&pg&&parseInt(pg[1])>cur&&h.indexOf('nextPageToken')>=0)
         return h.startsWith('/')?'https://www.amazon.co.jp'+h:h;}
-    /* 優先2: フォーム/data属性からトークン取得してURL構築 */
+    /* 優先2: フォーム/data属性からトークン取得 */
     var found=findToken(doc);
     if(found&&found.token&&found.page>cur)
       return 'https://www.amazon.co.jp/product-reviews/'+asin+'/?sortBy=recent&pageNumber='+found.page+'&nextPageToken='+encodeURIComponent(found.token);
@@ -81,6 +81,9 @@
       var tpg=th.match(/pageNumber=(\d+)/);
       if(tpg&&parseInt(tpg[1])>cur)return th.startsWith('/')?'https://www.amazon.co.jp'+th:th;
     }
+    /* 優先4: トークンなし「次へ」リンク（ログイン済みセッションで動作する場合） */
+    if(el){var h2=el.getAttribute('href')||'';var pg2=h2.match(/pageNumber=(\d+)/);
+      if(h2&&pg2&&parseInt(pg2[1])>cur)return h2.startsWith('/')?'https://www.amazon.co.jp'+h2:h2;}
     return null;
   }
 
