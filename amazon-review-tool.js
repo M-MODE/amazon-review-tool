@@ -90,9 +90,14 @@
   function toYM(d){var m=d.match(/^(\d{4})\/(\d{2})/);return m?m[1]+'/'+m[2]:null;}
 
   var _seen={};
-  function rKey(rid,body,date){
-    if(rid&&rid.length>3) return 'id:'+rid;
-    return 'bd:'+(body||'').slice(0,60)+'|'+date;
+  function markSeen(rid,body,date){
+    var bk='bd:'+(body||'').slice(0,60)+'|'+date;
+    _seen[bk]=true;
+    if(rid&&rid.length>3) _seen['id:'+rid]=true;
+  }
+  function isSeen(rid,body,date){
+    if(rid&&rid.length>3&&_seen['id:'+rid]) return true;
+    return !!_seen['bd:'+(body||'').slice(0,60)+'|'+date];
   }
 
   function parseReviews(doc){
@@ -102,8 +107,8 @@
       var bEl=el.querySelector('[data-hook="review-body"] span'),body=bEl?bEl.textContent.trim():'';
       var dEl=el.querySelector('[data-hook="review-date"]'),date=cleanDate(dEl?dEl.textContent.trim():'');
       var vine=isVine(el),rid=el.id||'';
-      var key=rKey(rid,body,date);
-      if(_seen[key])return;_seen[key]=true;
+      if(isSeen(rid,body,date))return;
+      markSeen(rid,body,date);
       if(body||title)rv.push({rating:rating,title:title,body:body,date:date,vine:vine,rid:rid});
     });
     return rv;
@@ -259,10 +264,7 @@
   window._bhlAmzRunning = true;
 
   if(sessionData && sessionData.asin === asin && sessionData.reviews && sessionData.reviews.length > 0){
-    _seen = {}; sessionData.reviews.forEach(function(r){
-      var key = r.rid && r.rid.length > 3 ? 'id:'+r.rid : 'bd:'+(r.body||'').slice(0,60)+'|'+r.date;
-      _seen[key] = true;
-    });
+    _seen = {}; sessionData.reviews.forEach(function(r){ markSeen(r.rid||'',r.body||'',r.date||''); });
   } else { _seen = {}; sessionData = null; }
 
   var allReviews = sessionData ? sessionData.reviews.slice() : parseReviews(document);
@@ -272,9 +274,9 @@
   var _fetched = {};
   upsertProg(pageCount, allReviews.length);
 
-  /* ── AJAXエンドポイントで取得（トークン不要） ── */
+  /* ── AJAXエンドポイントで取得（トークン不要・タイムアウト付き） ── */
   function fetchAjax(pg, filter, sort, cb){
-    var body = new URLSearchParams({
+    var params = new URLSearchParams({
       sortBy: sort||'recent', reviewerType:'all_reviews',
       formatType:'all_formats', mediaType:'all_contents',
       filterByStar: filter||'all_stars', pageSize:'10',
@@ -284,21 +286,23 @@
     var key = asin+'|'+(filter||'all')+'|'+(sort||'recent')+'|'+pg;
     if(_fetched[key]){ cb(null); return; }
     _fetched[key] = true;
+    var ctrl = new AbortController();
+    var tid = setTimeout(function(){ ctrl.abort(); }, 8000);
     fetch('https://www.amazon.co.jp/hz/reviews-render/ajax/reviews/get',{
-      method:'POST', credentials:'include',
+      method:'POST', credentials:'include', signal: ctrl.signal,
       headers:{'Content-Type':'application/x-www-form-urlencoded','X-Requested-With':'XMLHttpRequest'},
-      body: body.toString()
+      body: params.toString()
     }).then(function(r){return r.text();}).then(function(txt){
-      /* レスポンスはJSON文字列か生HTMLの場合がある */
+      clearTimeout(tid);
       var doc;
       try{
         var j=JSON.parse(txt);
         if(j.html){ doc=(new DOMParser()).parseFromString(j.html,'text/html'); }
-        else if(j[0] && j[0].html){ doc=(new DOMParser()).parseFromString(j[0].html,'text/html'); }
+        else if(j[0]&&j[0].html){ doc=(new DOMParser()).parseFromString(j[0].html,'text/html'); }
       }catch(e){}
       if(!doc){ doc=(new DOMParser()).parseFromString(txt,'text/html'); }
       cb(doc);
-    }).catch(function(){ cb(null); });
+    }).catch(function(){ clearTimeout(tid); cb(null); });
   }
 
   /* ── フォールバック: 通常fetch ── */
@@ -326,9 +330,9 @@
     });
   }
 
-  /* AJAXで all_stars を全ページ取得してから星フィルターへ */
+  /* AJAXで all_stars をページ2から取得（ページ1はlive DOMから取得済み） */
   function startAjaxPhase(){
-    runAjax(1, 'all_stars', 'recent', function(){
+    runAjax(2, 'all_stars', 'recent', function(){
       if(!ajaxFailed){
         /* AJAXが機能 → 星フィルターもAJAXで */
         runAjaxStars();
