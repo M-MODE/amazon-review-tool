@@ -65,26 +65,27 @@
   }
   function getNextUrl(doc,cur){
     cur=cur||1;
-    /* 優先1: nextPageToken付きリンク */
+    /* 方法1: nextPageToken付きリンク（最優先） */
     var el=doc.querySelector('.a-pagination .a-last a')||doc.querySelector('li.a-last a');
     if(el){var h=el.getAttribute('href')||'';var pg=h.match(/pageNumber=(\d+)/);
       if(h&&pg&&parseInt(pg[1])>cur&&h.indexOf('nextPageToken')>=0)
         return h.startsWith('/')?'https://www.amazon.co.jp'+h:h;}
-    /* 優先2: フォーム/data属性からトークン取得 */
+    /* 方法2: フォーム/data属性からトークン構築 */
     var found=findToken(doc);
     if(found&&found.token&&found.page>cur)
       return 'https://www.amazon.co.jp/product-reviews/'+asin+'/?sortBy=recent&pageNumber='+found.page+'&nextPageToken='+encodeURIComponent(found.token);
-    /* 優先3: nextPageToken付きの任意のリンク */
+    /* 方法3: nextPageToken付きの任意リンク */
     var tLinks=doc.querySelectorAll('a[href*="nextPageToken"]');
     for(var ti=0;ti<tLinks.length;ti++){
       var th=tLinks[ti].getAttribute('href')||'';
       var tpg=th.match(/pageNumber=(\d+)/);
       if(tpg&&parseInt(tpg[1])>cur)return th.startsWith('/')?'https://www.amazon.co.jp'+th:th;
     }
-    /* 優先4: トークンなし「次へ」リンク（ログイン済みセッションで動作する場合） */
+    /* 方法4: .a-last リンク（トークンなし）*/
     if(el){var h2=el.getAttribute('href')||'';var pg2=h2.match(/pageNumber=(\d+)/);
       if(h2&&pg2&&parseInt(pg2[1])>cur)return h2.startsWith('/')?'https://www.amazon.co.jp'+h2:h2;}
-    return null;
+    /* 方法5: ページ番号を単純にインクリメント（最終手段） */
+    return 'https://www.amazon.co.jp/product-reviews/'+asin+'/?sortBy=recent&pageNumber='+(cur+1);
   }
 
   /* ── グラフ・UI ── */
@@ -158,22 +159,11 @@
     var newRevs = parseReviews(document);
     var allRevs = savedState.reviews.concat(newRevs);
     var pageNum = curPageInUrl;
-    var nextUrl = getNextUrl(document, pageNum);
+    var emptyPages = savedState.emptyPages || 0;
+    if(newRevs.length === 0) emptyPages++; else emptyPages = 0;
 
-    if (nextUrl && newRevs.length > 0) {
-      /* まだページがある */
-      var newState = {asin:asin, reviews:allRevs, pageNum:pageNum, productTitle:savedState.productTitle};
-      try { localStorage.setItem(stateKey, JSON.stringify(newState)); } catch(e) {}
-
-      /* 自動的に次ページへ移動 */
-      var bar = document.createElement('div');
-      bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:2147483647;background:#0F172A;color:#fff;padding:14px 20px;font-family:sans-serif;font-size:14px;display:flex;align-items:center;gap:12px;box-shadow:0 2px 12px rgba(0,0,0,.6)';
-      bar.innerHTML = '<span style="font-size:20px">★</span><div><div style="font-weight:700;color:#FF9900">レビュー取得中</div><div style="font-size:12px;color:#94A3B8">累計 <strong style="color:#fff;font-size:16px">'+allRevs.length+'</strong> 件取得済み・次のページへ移動します...</div></div>';
-      document.body.appendChild(bar);
-      setTimeout(function(){ location.href = nextUrl; }, 1000);
-
-    } else {
-      /* 全ページ完了 */
+    /* 2ページ連続で新規レビュー0件 → 終了 */
+    if(emptyPages >= 2){
       try { localStorage.removeItem(stateKey); } catch(e) {}
       showPanel(allRevs, savedState.productTitle);
       playDone();
@@ -181,7 +171,19 @@
       setTimeout(function(){
         alert('✅ レビュー取得完了！\n\n合計 '+allRevs.length+' 件\n├ Vine（Amazonで購入なし）: '+vc+' 件\n└ 非Vine（Amazonで購入）: '+(allRevs.length-vc)+' 件');
       }, 500);
+      return;
     }
+
+    var nextUrl = getNextUrl(document, pageNum);
+    /* 状態保存して次ページへ移動 */
+    var newState = {asin:asin, reviews:allRevs, pageNum:pageNum, productTitle:savedState.productTitle, emptyPages:emptyPages};
+    try { localStorage.setItem(stateKey, JSON.stringify(newState)); } catch(e) {}
+
+    var bar = document.createElement('div');
+    bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:2147483647;background:#0F172A;color:#fff;padding:14px 20px;font-family:sans-serif;font-size:14px;display:flex;align-items:center;gap:12px;box-shadow:0 2px 12px rgba(0,0,0,.6)';
+    bar.innerHTML = '<span style="font-size:20px">★</span><div><div style="font-weight:700;color:#FF9900">レビュー取得中</div><div style="font-size:12px;color:#94A3B8">累計 <strong style="color:#fff;font-size:16px">'+allRevs.length+'</strong> 件 / ページ'+pageNum+'　→　次のページへ移動中...</div></div>';
+    document.body.appendChild(bar);
+    setTimeout(function(){ location.href = nextUrl; }, 800);
     return;
   }
 
