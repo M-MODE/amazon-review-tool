@@ -90,7 +90,10 @@
   function toYM(d){var m=d.match(/^(\d{4})\/(\d{2})/);return m?m[1]+'/'+m[2]:null;}
 
   var _seen={};
-  function rKey(el,t,d){var id=el.id||'';return(id&&id.length>3)?'id:'+id:'td:'+(t+'|'+d).slice(0,80);}
+  function rKey(rid,body,date){
+    if(rid&&rid.length>3) return 'id:'+rid;
+    return 'bd:'+(body||'').slice(0,60)+'|'+date;
+  }
 
   function parseReviews(doc){
     var rv=[];
@@ -98,9 +101,10 @@
       var rating=parseRating(el),title=parseTitle(el.querySelector('[data-hook="review-title"]'));
       var bEl=el.querySelector('[data-hook="review-body"] span'),body=bEl?bEl.textContent.trim():'';
       var dEl=el.querySelector('[data-hook="review-date"]'),date=cleanDate(dEl?dEl.textContent.trim():'');
-      var vine=isVine(el),key=rKey(el,title,date);
+      var vine=isVine(el),rid=el.id||'';
+      var key=rKey(rid,body,date);
       if(_seen[key])return;_seen[key]=true;
-      if(body||title)rv.push({rating:rating,title:title,body:body,date:date,vine:vine});
+      if(body||title)rv.push({rating:rating,title:title,body:body,date:date,vine:vine,rid:rid});
     });
     return rv;
   }
@@ -215,7 +219,9 @@
     }).join('');
     var panel=document.createElement('div');panel.id='_bhl_amz_panel';
     panel.style.cssText='position:fixed;top:16px;right:16px;z-index:2147483647;width:480px;max-height:90vh;overflow-y:auto;background:#0F172A;color:#E2E8F0;border-radius:12px;box-shadow:0 8px 32px rgba(0,0,0,.7);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;font-size:13px;line-height:1.5';
-    panel.innerHTML='<div style="background:#1E3A5F;padding:14px 16px;border-radius:12px 12px 0 0;display:flex;align-items:center;gap:10px"><div style="background:#FF9900;border-radius:50%;width:32px;height:32px;display:flex;align-items:center;justify-content:center;font-size:17px;flex-shrink:0">★</div><div style="flex:1;min-width:0"><div style="font-weight:700;font-size:14px;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+productTitle+'</div><div style="font-size:11px;color:#94A3B8;margin-top:2px">ASIN: '+asin+'　<span style="color:#FF9900">'+reviews.length+'件取得</span></div></div><button onclick="document.getElementById(\'_bhl_amz_panel\').remove()" style="background:none;border:none;color:#94A3B8;font-size:22px;cursor:pointer;padding:0 0 0 8px;line-height:1">&times;</button></div>'
+    panel.innerHTML='<div style="background:#1E3A5F;padding:14px 16px;border-radius:12px 12px 0 0;display:flex;align-items:center;gap:10px"><div style="background:#FF9900;border-radius:50%;width:32px;height:32px;display:flex;align-items:center;justify-content:center;font-size:17px;flex-shrink:0">★</div><div style="flex:1;min-width:0"><div style="font-weight:700;font-size:14px;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+productTitle+'</div><div style="font-size:11px;color:#94A3B8;margin-top:2px">ASIN: '+asin+'　<span style="color:#FF9900">'+reviews.length+'件取得</span></div></div>'
+      +'<button onclick="try{sessionStorage.removeItem(\''+SESS_KEY+'\');}catch(e){} document.getElementById(\'_bhl_amz_panel\').remove();alert(\'リセットしました。次回クリックで最初から取得します。\');" style="background:#1E293B;border:1px solid #334155;color:#94A3B8;font-size:11px;cursor:pointer;padding:4px 8px;border-radius:4px;margin-right:4px">🔄</button>'
+      +'<button onclick="document.getElementById(\'_bhl_amz_panel\').remove()" style="background:none;border:none;color:#94A3B8;font-size:22px;cursor:pointer;padding:0 0 0 4px;line-height:1">&times;</button></div>'
       +'<div style="display:flex;align-items:center;justify-content:center;gap:20px;padding:12px 16px;background:#162032;border-bottom:1px solid #1E3A5F"><div style="text-align:center"><div style="font-size:28px;font-weight:700;color:#FF9900">'+aAll+'</div><div style="font-size:11px;color:#64748B">★ 全体平均</div></div><div style="width:1px;height:40px;background:#1E3A5F"></div><div style="text-align:center"><div style="font-size:28px;font-weight:700;color:#fff">'+reviews.length+'</div><div style="font-size:11px;color:#64748B">件取得</div></div><div style="width:1px;height:40px;background:#1E3A5F"></div><div style="text-align:center"><div style="font-size:20px;font-weight:700;color:#C4B5FD">'+vC+'<span style="font-size:12px;color:#64748B"> Vine</span></div><div style="font-size:11px;color:#64748B">'+vP+'%</div></div><div style="text-align:center"><div style="font-size:20px;font-weight:700;color:#67E8F9">'+nvC+'<span style="font-size:12px;color:#64748B"> 非Vine</span></div><div style="font-size:11px;color:#64748B">'+(100-vP)+'%</div></div></div>'
       +monthChart(reviews)
       +'<div style="padding:14px 16px;background:#162032;border-bottom:1px solid #1E3A5F">'+distChart(reviews,'■ 全体','#FF9900')+distChart(vRv,'■ Vine（Amazonで購入なし）','#C4B5FD')+distChart(nvRv,'■ 非Vine（Amazonで購入）','#67E8F9')+'</div>'
@@ -247,7 +253,10 @@
 
   if(sessionData && sessionData.asin === asin && sessionData.reviews && sessionData.reviews.length > 0){
     _seen = {};
-    sessionData.reviews.forEach(function(r){ _seen['td:'+(r.title+'|'+r.date).slice(0,80)] = true; });
+    sessionData.reviews.forEach(function(r){
+      var key = r.rid && r.rid.length > 3 ? 'id:'+r.rid : 'bd:'+(r.body||'').slice(0,60)+'|'+r.date;
+      _seen[key] = true;
+    });
   } else {
     _seen = {};
     sessionData = null;
