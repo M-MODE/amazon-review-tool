@@ -245,23 +245,13 @@
   }
 
   /* ── セッションストレージキー ── */
+  /* ── セッションストレージキー ── */
   var SESS_KEY = '_bhl_amz_sess_' + asin;
+  var STAR_FILTERS = ['five_star','four_star','three_star','two_star','one_star'];
+  var starIndex = -1;
 
-  /* ── ★別フィルター（順番に取得） ── */
-  var STAR_FILTERS = [
-    '',           /* 全体（sortBy=recent） */
-    'five_star',  /* ★5 */
-    'four_star',  /* ★4 */
-    'three_star', /* ★3 */
-    'two_star',   /* ★2 */
-    'one_star'    /* ★1 */
-  ];
-  var filterIndex = 0;
-
-  /* ── 既存セッションを読み込み（2回目以降の追加取得用） ── */
   var sessionData = null;
   try { sessionData = JSON.parse(sessionStorage.getItem(SESS_KEY) || 'null'); } catch(e) {}
-
   window._bhlAmzRunning = true;
 
   if(sessionData && sessionData.asin === asin && sessionData.reviews && sessionData.reviews.length > 0){
@@ -270,149 +260,78 @@
       var key = r.rid && r.rid.length > 3 ? 'id:'+r.rid : 'bd:'+(r.body||'').slice(0,60)+'|'+r.date;
       _seen[key] = true;
     });
-  } else {
-    _seen = {};
-    sessionData = null;
-  }
+  } else { _seen = {}; sessionData = null; }
 
   var allReviews = sessionData ? sessionData.reviews.slice() : parseReviews(document);
   var ptEl = document.querySelector('#productTitle,h1.a-size-large');
   var productTitle = ptEl ? ptEl.textContent.trim() : 'ASIN: '+asin;
   var pageCount = 1;
-  var emptyCount = 0;
-  var _fetchedUrls = {};
+  var _fetched = {};
   upsertProg(pageCount, allReviews.length);
 
-  /* ── iframeでページを読み込む（フォームが現れるまでポーリング） ── */
-  function loadPage(url, callback) {
-    var iframe = document.createElement('iframe');
-    iframe.style.cssText = 'position:fixed;top:-3000px;left:-3000px;width:1280px;height:960px;visibility:hidden;pointer-events:none';
-    var resolved = false;
-    var pollTimer = null;
-
-    function cleanup(){
-      if(pollTimer) clearInterval(pollTimer);
-      try{ document.body.removeChild(iframe); }catch(e){}
-    }
-    function resolve(doc){
-      if(resolved) return; resolved = true;
-      cleanup(); callback(doc);
-    }
-
-    iframe.onload = function(){
-      var elapsed = 0;
-      pollTimer = setInterval(function(){
-        elapsed += 300;
-        try{
-          var doc = iframe.contentDocument || (iframe.contentWindow && iframe.contentWindow.document);
-          if(!doc){ if(elapsed >= 12000) resolve(null); return; }
-          var hasReviews = doc.querySelectorAll('[data-hook="review"]').length > 0;
-          var hasToken   = doc.querySelector('input[name="nextPageToken"]')
-                        || doc.querySelector('a[href*="nextPageToken"]')
-                        || doc.querySelector('[data-csa-c-slot-id]');
-          /* レビューあり + トークンあり → 最適タイミング */
-          if(hasReviews && hasToken){ resolve(doc); return; }
-          /* レビューあり + 10秒経過 → トークンなしでも続行 */
-          if(hasReviews && elapsed >= 10000){ resolve(doc); return; }
-          /* タイムアウト */
-          if(elapsed >= 12000){ resolve(doc || null); return; }
-        }catch(e){ resolve(null); }
-      }, 300);
-    };
-
-    setTimeout(function(){ resolve(null); }, 15000);
-    document.body.appendChild(iframe);
-    iframe.src = url;
+  /* fetchでページ取得 */
+  function fp(url, cb){
+    var k = url.replace(/[?&]t=\d+/,'');
+    if(_fetched[k]){ cb(null); return; }
+    _fetched[k] = true;
+    fetch(url,{credentials:'include'}).then(function(r){return r.text();}).then(function(html){
+      cb((new DOMParser()).parseFromString(html,'text/html'));
+    }).catch(function(){ cb(null); });
   }
 
-  function buildFilterUrl(filter, pg){
-    var base = 'https://www.amazon.co.jp/product-reviews/'+asin+'/?sortBy=recent';
-    if(filter) base += '&filterByStar='+filter;
-    if(pg > 1) base += '&pageNumber='+pg;
-    return base;
-  }
-
-  /* ★フィルターを次に進める */
-  function nextFilter(){
-    filterIndex++;
-    if(filterIndex >= STAR_FILTERS.length){ finish(); return; }
-    emptyCount = 0;
-    var url = buildFilterUrl(STAR_FILTERS[filterIndex], 1);
-    upsertProg(pageCount, allReviews.length);
-    loadPage(url, function(doc){
-      if(!doc||!window._bhlAmzRunning){ setTimeout(function(){ nextFilter(); }, 500); return; }
-      var revs = parseReviews(doc);
-      pageCount++;
-      allReviews = allReviews.concat(revs);
-      upsertProg(pageCount, allReviews.length);
-      if(revs.length > 0){ emptyCount = 0; } else { emptyCount++; }
-      var next = getNextUrl(doc, 1);
-      if(next && !_fetchedUrls[next]){
-        _fetchedUrls[next] = true;
-        setTimeout(function(){ fetchByUrl(next, 2); }, 1000);
-      } else {
-        setTimeout(function(){ nextFilter(); }, 500);
-      }
+  /* フェーズ1: トークンチェーン */
+  function runChain(url, pg){
+    if(!url||!window._bhlAmzRunning){ runStars(); return; }
+    fp(url, function(doc){
+      if(!doc||!window._bhlAmzRunning){ runStars(); return; }
+      var rv=parseReviews(doc); pageCount++; allReviews=allReviews.concat(rv);
+      upsertProg(pageCount,allReviews.length);
+      var nx=getNextUrl(doc,pg);
+      if(nx&&rv.length>0){ setTimeout(function(){runChain(nx,pg+1);},600); }
+      else { runStars(); }
     });
   }
 
-  function fetchByUrl(nextUrl, curPageNum){
-    if(!window._bhlAmzRunning){ finish(); return; }
+  /* フェーズ2: ★フィルター各ページをfetch */
+  function runStars(){
+    starIndex++;
+    if(starIndex>=STAR_FILTERS.length||!window._bhlAmzRunning){ finish(); return; }
+    var url='https://www.amazon.co.jp/product-reviews/'+asin+'/?sortBy=recent&filterByStar='+STAR_FILTERS[starIndex];
+    upsertProg(pageCount,allReviews.length);
+    fp(url,function(doc){
+      if(!doc||!window._bhlAmzRunning){ setTimeout(runStars,300); return; }
+      var rv=parseReviews(doc); pageCount++; allReviews=allReviews.concat(rv);
+      upsertProg(pageCount,allReviews.length);
+      var nx=getNextUrl(doc,1);
+      if(nx&&rv.length>0){ setTimeout(function(){runStarPages(nx,2);},600); }
+      else { setTimeout(runStars,300); }
+    });
+  }
 
-    var urlKey = (nextUrl||'').replace(/[?&]t=\d+/,'');
-    if(_fetchedUrls[urlKey]){
-      setTimeout(function(){ nextFilter(); }, 500);
-      return;
-    }
-    _fetchedUrls[urlKey] = true;
-
-    loadPage(nextUrl, function(doc){
-      if(!doc||!window._bhlAmzRunning){ setTimeout(function(){ nextFilter(); }, 500); return; }
-      var revs = parseReviews(doc);
-      pageCount++;
-      allReviews = allReviews.concat(revs);
-      upsertProg(pageCount, allReviews.length);
-
-      if(revs.length > 0){ emptyCount = 0; }
-      else { emptyCount++; }
-
-      try { sessionStorage.setItem(SESS_KEY, JSON.stringify({asin:asin, reviews:allReviews})); } catch(e) {}
-
-      var next = getNextUrl(doc, curPageNum);
-      var nextKey = next ? next.replace(/[?&]t=\d+/,'') : null;
-
-      if(next && nextKey && !_fetchedUrls[nextKey]){
-        setTimeout(function(){ fetchByUrl(next, curPageNum+1); }, 1000);
-      } else {
-        setTimeout(function(){ nextFilter(); }, 500);
-      }
+  function runStarPages(url,pg){
+    if(!url||!window._bhlAmzRunning){ setTimeout(runStars,300); return; }
+    fp(url,function(doc){
+      if(!doc||!window._bhlAmzRunning){ setTimeout(runStars,300); return; }
+      var rv=parseReviews(doc); pageCount++; allReviews=allReviews.concat(rv);
+      upsertProg(pageCount,allReviews.length);
+      var nx=getNextUrl(doc,pg);
+      if(nx&&rv.length>0){ setTimeout(function(){runStarPages(nx,pg+1);},600); }
+      else { setTimeout(runStars,300); }
     });
   }
 
   function finish(){
-    window._bhlAmzRunning = false;
-    try { sessionStorage.setItem(SESS_KEY, JSON.stringify({asin:asin, reviews:allReviews})); } catch(e) {}
-    showPanel(allReviews, productTitle);
-    playDone();
-    var vc = allReviews.filter(function(r){ return r.vine; }).length;
-    var isAdding = sessionData && sessionData.reviews && sessionData.reviews.length > 0;
+    window._bhlAmzRunning=false;
+    try{sessionStorage.setItem(SESS_KEY,JSON.stringify({asin:asin,reviews:allReviews}));}catch(e){}
+    showPanel(allReviews,productTitle); playDone();
+    var vc=allReviews.filter(function(r){return r.vine;}).length;
     setTimeout(function(){
-      alert('✅ レビュー取得完了！\n\n'
-        + (isAdding ? '【追加取得】前回分と合計 ' : '合計 ') + allReviews.length + ' 件\n'
-        + '├ Vine（Amazonで購入なし）: '+vc+' 件\n'
-        + '└ 非Vine（Amazonで購入）: '+(allReviews.length-vc)+' 件\n\n'
-        + 'もう一度クリックするとさらに追加取得できます。');
-    }, 500);
+      alert('✅ レビュー取得完了！\n\n合計 '+allReviews.length+' 件\n├ Vine（Amazonで購入なし）: '+vc+' 件\n└ 非Vine（Amazonで購入）: '+(allReviews.length-vc)+' 件');
+    },500);
   }
 
-  /* 最初のフィルター（全件）から開始 */
-  var firstNext = getNextUrl(document, 1);
-  if(firstNext){
-    _fetchedUrls[firstNext] = true;
-    fetchByUrl(firstNext, 2);
-  } else {
-    nextFilter(); /* ★5フィルターから試みる */
-  }
+  var firstNext=getNextUrl(document,1);
+  if(firstNext){ runChain(firstNext,2); } else { runStars(); }
 
   } /* end runTool */
 
