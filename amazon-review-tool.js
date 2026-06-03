@@ -109,21 +109,34 @@
     return rv;
   }
 
-  /* ── nextPageToken取得（5段階） ── */
+  /* ── nextPageToken取得（6段階） ── */
   function findTokenInDoc(doc){
     /* 1: aタグ */
     var al=doc.querySelectorAll('a[href*="nextPageToken"]');
     if(al.length){var h=al[al.length-1].getAttribute('href')||'';var tm=h.match(/nextPageToken=([^&"'\s]+)/);var pm=h.match(/pageNumber=(\d+)/);if(tm)return{token:decodeURIComponent(tm[1]),page:pm?parseInt(pm[1]):2};}
-    /* 2: フォーム */
+    /* 2: フォームのhidden input */
     var forms=doc.querySelectorAll('form');
     for(var fi=0;fi<forms.length;fi++){var tIn=forms[fi].querySelector('input[name="nextPageToken"]');if(tIn&&tIn.value){var pIn=forms[fi].querySelector('input[name="pageNumber"]');return{token:tIn.value,page:pIn?parseInt(pIn.value):2};}}
-    /* 3: data属性 */
+    /* 3: CSA/data属性（Amazonのコンポーネントシステム） */
+    var candidates = doc.querySelectorAll('[data-csa-c-slot-id],[data-action],[data-csa-c-type]');
+    for(var ci=0;ci<candidates.length;ci++){
+      for(var cai=0;cai<candidates[ci].attributes.length;cai++){
+        var av=candidates[ci].attributes[cai].value;
+        if(av.length<10||av.indexOf('nextPageToken')<0)continue;
+        var jm=av.match(/"nextPageToken"\s*:\s*"([^"]+)"/);
+        var jp=av.match(/"pageNumber"\s*:\s*(\d+)/);
+        if(jm)return{token:jm[1],page:jp?parseInt(jp[1]):2};
+        var um=av.match(/nextPageToken=([A-Za-z0-9+%\/=]{10,})/);
+        if(um)return{token:decodeURIComponent(um[1]),page:2};
+      }
+    }
+    /* 4: 全要素のdata属性スキャン */
     var allEls=doc.querySelectorAll('*');
-    for(var ei=0;ei<allEls.length;ei++){for(var ai=0;ai<allEls[ei].attributes.length;ai++){var av=allEls[ei].attributes[ai].value;if(av.length<10||av.indexOf('nextPageToken')<0)continue;var jm=av.match(/"nextPageToken"\s*:\s*"([^"]+)"/);var jp=av.match(/"pageNumber"\s*:\s*(\d+)/);if(jm)return{token:jm[1],page:jp?parseInt(jp[1]):2};var um=av.match(/nextPageToken=([A-Za-z0-9+%\/=]{10,})/);if(um)return{token:decodeURIComponent(um[1]),page:2};}}
-    /* 4: script */
+    for(var ei=0;ei<allEls.length;ei++){for(var ai=0;ai<allEls[ei].attributes.length;ai++){var av2=allEls[ei].attributes[ai].value;if(av2.length<10||av2.indexOf('nextPageToken')<0)continue;var jm2=av2.match(/"nextPageToken"\s*:\s*"([^"]+)"/);var jp2=av2.match(/"pageNumber"\s*:\s*(\d+)/);if(jm2)return{token:jm2[1],page:jp2?parseInt(jp2[1]):2};var um2=av2.match(/nextPageToken=([A-Za-z0-9+%\/=]{10,})/);if(um2)return{token:decodeURIComponent(um2[1]),page:2};}}
+    /* 5: script */
     var scripts=doc.querySelectorAll('script');
     for(var si=0;si<scripts.length;si++){var st=scripts[si].textContent||'';if(st.indexOf('nextPageToken')<0)continue;var sm=st.match(/"nextPageToken"\s*:\s*"([A-Za-z0-9+\/=]{10,})"/);var sp=st.match(/"pageNumber"\s*:\s*(\d+)/);if(sm)return{token:sm[1],page:sp?parseInt(sp[1]):2};}
-    /* 5: innerHTML */
+    /* 6: innerHTML */
     try{var html=(doc.body||{innerHTML:''}).innerHTML;var hm=html.match(/"nextPageToken"\s*:\s*"([A-Za-z0-9+\/=]{10,})"/);var hp=html.match(/"pageNumber"\s*:\s*(\d+)/);if(hm)return{token:hm[1],page:hp?parseInt(hp[1]):2};}catch(e){}
     return null;
   }
@@ -270,38 +283,46 @@
   var _fetchedUrls = {};
   upsertProg(pageCount, allReviews.length);
 
-  /* ── iframeでページを読み込む（JSを実行してトークン取得） ── */
+  /* ── iframeでページを読み込む（フォームが現れるまでポーリング） ── */
   function loadPage(url, callback) {
     var iframe = document.createElement('iframe');
-    iframe.style.cssText = 'position:fixed;top:-3000px;left:-3000px;width:1200px;height:900px;visibility:hidden;pointer-events:none';
-    iframe.src = url;
-    var tid = setTimeout(function(){ cleanup(); callback(null); }, 20000);
+    iframe.style.cssText = 'position:fixed;top:-3000px;left:-3000px;width:1280px;height:960px;visibility:hidden;pointer-events:none';
+    var resolved = false;
+    var pollTimer = null;
+
     function cleanup(){
-      clearTimeout(tid);
+      if(pollTimer) clearInterval(pollTimer);
       try{ document.body.removeChild(iframe); }catch(e){}
     }
+    function resolve(doc){
+      if(resolved) return; resolved = true;
+      cleanup(); callback(doc);
+    }
+
     iframe.onload = function(){
-      /* JSが実行されるまで少し待つ */
-      setTimeout(function(){
+      var elapsed = 0;
+      pollTimer = setInterval(function(){
+        elapsed += 300;
         try{
           var doc = iframe.contentDocument || (iframe.contentWindow && iframe.contentWindow.document);
-          /* レビューが見つからない場合はもう少し待つ */
-          if(doc && doc.querySelectorAll('[data-hook="review"]').length === 0){
-            setTimeout(function(){
-              try{
-                var doc2 = iframe.contentDocument || (iframe.contentWindow && iframe.contentWindow.document);
-                callback(doc2);
-              }catch(e){ callback(null); }
-              cleanup();
-            }, 2000);
-          } else {
-            callback(doc);
-            cleanup();
-          }
-        }catch(e){ callback(null); cleanup(); }
-      }, 2000);
+          if(!doc){ if(elapsed >= 12000) resolve(null); return; }
+          var hasReviews = doc.querySelectorAll('[data-hook="review"]').length > 0;
+          var hasToken   = doc.querySelector('input[name="nextPageToken"]')
+                        || doc.querySelector('a[href*="nextPageToken"]')
+                        || doc.querySelector('[data-csa-c-slot-id]');
+          /* レビューあり + トークンあり → 最適タイミング */
+          if(hasReviews && hasToken){ resolve(doc); return; }
+          /* レビューあり + 10秒経過 → トークンなしでも続行 */
+          if(hasReviews && elapsed >= 10000){ resolve(doc); return; }
+          /* タイムアウト */
+          if(elapsed >= 12000){ resolve(doc || null); return; }
+        }catch(e){ resolve(null); }
+      }, 300);
     };
+
+    setTimeout(function(){ resolve(null); }, 15000);
     document.body.appendChild(iframe);
+    iframe.src = url;
   }
 
   function buildFilterUrl(filter, pg){
