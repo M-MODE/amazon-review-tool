@@ -1,11 +1,12 @@
-/* Amazon レビュー取得ツール v12.6 — bh life
- * 根本修正: 状態をすべて window._bhlState_[asin] で管理
- * IIFEのスコープに依存せず、どこからでも同じオブジェクトを参照
+/* Amazon レビュー取得ツール v12.7 — bh life
+ * 修正: 終了判定を「新規0件の連続」から「ページの総レビュー要素数が0」に変更
+ *   - Amazonは常に10件/ページ返す
+ *   - 重複除去後に新規0件でも、ページ自体に要素があれば次へ進む
+ *   - ページの要素数が0になったら本当の終わり
  */
 (function () {
   'use strict';
 
-  // ── ASIN取得 ──
   var url = location.href, asin = null, m;
   m = url.match(/\/dp\/([A-Z0-9]{10})/i); if (m) asin = m[1].toUpperCase();
   if (!asin) { m = url.match(/\/gp\/product\/([A-Z0-9]{10})/i); if (m) asin = m[1].toUpperCase(); }
@@ -16,18 +17,12 @@
     return;
   }
 
-  // ── グローバル状態（IIFEをまたいで共有） ──
   window._bhlState = window._bhlState || {};
   if (!window._bhlState[asin]) {
     window._bhlState[asin] = { reviews: [], seen: {}, nextPage: 1, done: false };
   }
-
-  // ── 現在のASINを_bhlCurrentAsinとして記録（グローバル関数から参照） ──
   window._bhlCurrentAsin = asin;
-
   var BATCH = 10;
-
-  // ── 状態アクセサ（常に最新を参照） ──
   function S(){ return window._bhlState[window._bhlCurrentAsin]; }
 
   // ── ユーティリティ ──
@@ -87,8 +82,10 @@
       })
       .then(function(html){
         var doc = new DOMParser().parseFromString(html,'text/html');
+        var allEls = doc.querySelectorAll('[data-hook="review"]');
+        var rawCount = allEls.length; // ページの総レビュー要素数
         var rv = [];
-        doc.querySelectorAll('[data-hook="review"]').forEach(function(el){
+        allEls.forEach(function(el){
           var rating = parseRating(el);
           var titleEl = el.querySelector('[data-hook="review-title"]') || el.querySelector('[class*="review-title"]');
           var title = parseTitle(titleEl);
@@ -101,17 +98,17 @@
           markSeen({rid:rid,body:body,date:date});
           if(body||title) rv.push({rating:rating,title:title,body:body,date:date,vine:vine,rid:rid});
         });
-        return {revs: rv, newCount: rv.length};
+        // ▼ rawCount=0のみ終了判定。新規0件でもrawCount>0なら継続
+        return {revs: rv, rawCount: rawCount};
       })
-      .catch(function(e){ console.warn('fetchPage err p'+pageNum, e); return {revs:[], newCount:0}; });
+      .catch(function(e){ console.warn('fetchPage err p'+pageNum, e); return {revs:[], rawCount:0}; });
   }
 
-  // ── 1バッチ取得 ──
+  // ── 1バッチ取得（rawCount=0が3回連続で終了） ──
   function fetchBatch(){
-    var s = S();
     var batchNew = [];
-    var emptyCount = 0;
-    var startPage = s.nextPage;
+    var emptyCount = 0; // rawCount=0の連続回数
+    var startPage = S().nextPage;
     var endPage = startPage + BATCH - 1;
     var p = startPage;
 
@@ -120,12 +117,14 @@
       setMsg('取得中 p' + p + ' / p' + endPage + '　(累計' + S().reviews.length + '件)');
       return fetchPage(p).then(function(result){
         var st = S();
-        if(result.newCount === 0){
+        if(result.rawCount === 0){
+          // ページ自体が空 = 本当の終わり
           emptyCount++;
           if(emptyCount >= 3){ st.done = true; return batchNew; }
           p++; st.nextPage = p;
           return delay(600).then(next);
         }
+        // ページに要素あり → 新規が0件でも次へ進む
         emptyCount = 0;
         result.revs.forEach(function(r){ st.reviews.push(r); batchNew.push(r); });
         p++; st.nextPage = p;
@@ -162,10 +161,9 @@
     }).join('');
     return '<div style="padding:12px 16px;background:#162032;border-bottom:1px solid #1E3A5F"><div style="font-size:11px;font-weight:700;color:#94A3B8;margin-bottom:8px">📅 月別レビュー数</div>'+bars+'</div>';
   }
-
   function setMsg(txt){ var el=document.getElementById('_bhl_msg'); if(el) el.textContent=txt; }
 
-  // ── パネル描画（グローバル関数として定義） ──
+  // ── パネル描画 ──
   window._bhlRender = function(){
     var st = S();
     var reviews = st.reviews.slice().sort(function(a,b){return b.date.localeCompare(a.date);});
@@ -240,7 +238,6 @@
     window._bhlAmzAllReviews = reviews;
   };
 
-  // ── グローバル関数 ──
   window._bhlNext = function(){
     var btn=document.getElementById('_bhl_next_btn');
     if(btn){btn.disabled=true;btn.textContent='取得中...';btn.style.background='#1E3A5F';btn.style.cursor='default';}
@@ -249,7 +246,7 @@
       var st=S();
       setMsg(newRevs.length>0
         ?'✅ '+newRevs.length+'件追加（累計'+st.reviews.length+'件）'+(st.done?' 全件完了！':'')
-        :(st.done?'✅ 全件取得完了':'⚠️ 0件でした'));
+        :(st.done?'✅ 全件取得完了':'⚠️ 0件でした（重複除去済み）'));
       if(st.done) playDone();
     });
   };
