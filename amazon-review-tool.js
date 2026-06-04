@@ -1,9 +1,9 @@
-/* Amazon レビュー取得ツール v11.3 — bh life
- * 改善点:
- *   - 空ページ判定を緩和: emptyCount >= 3 に変更（連続3回空で停止）
- *   - バリエーション対応: 親ASIN・子ASIN一覧を取得して横展開
- *   - ページ上限引き上げ: nextToken使用時20→25、フォールバック時10→15
- *   - 役立ち順も同様に上限引き上げ
+/* Amazon レビュー取得ツール v11.4 — bh life
+ * v11.3からの修正:
+ *   - Vine判定を積極判定に変更（data-hook="avp-badge" を正判定）
+ *   - 重複除去をridベース優先＋body正規化強化
+ *   - 空ページ判定緩和・ページ上限引き上げ（v11.3から継承）
+ *   - バリエーション対応（v11.3から継承）
  */
 (function () {
   'use strict';
@@ -23,24 +23,19 @@
   // ── バリエーション（子ASIN）収集 ──
   function collectVariantAsins() {
     var variants = new Set();
-    // twisterデータから子ASIN取得
     var scripts = document.querySelectorAll('script');
     for (var i = 0; i < scripts.length; i++) {
       var txt = scripts[i].textContent || '';
-      // "asin":"XXXXXXXXXX" 形式
       var re = /"asin"\s*:\s*"([A-Z0-9]{10})"/g;
       var hit;
       while ((hit = re.exec(txt)) !== null) variants.add(hit[1].toUpperCase());
-      // dimensionValuesDisplayData の中にも入ることがある
       var re2 = /"([A-Z0-9]{10})"\s*:\s*\{/g;
       while ((hit = re2.exec(txt)) !== null) variants.add(hit[1].toUpperCase());
     }
-    // セレクトボックス・ラジオボタンにASINがあるケース
     document.querySelectorAll('[data-asin]').forEach(function(el) {
       var a = (el.getAttribute('data-asin') || '').toUpperCase();
       if (/^[A-Z0-9]{10}$/.test(a)) variants.add(a);
     });
-    // 必ず自分自身を含める
     variants.add(asin);
     return Array.from(variants).filter(function(a){ return /^[A-Z0-9]{10}$/.test(a); });
   }
@@ -57,18 +52,47 @@
     c.querySelectorAll('.a-icon-alt,i.a-icon').forEach(function(n){ n.parentNode&&n.parentNode.removeChild(n); });
     return c.textContent.replace(/\s+/g,' ').trim();
   }
-  function isVine(el){ return (el.textContent||'').indexOf('Amazonで購入')<0&&(el.textContent||'').indexOf('Verified Purchase')<0; }
+
+  // ▼ 修正①: Vine判定を「積極的に正判定」する方式に変更
+  // Vineレビューには avp-badge が「ない」かつ購入バッジも「ない」= Vine
+  // ただし「Amazonで購入」「Verified Purchase」バッジを確認して非Vineを判定
+  function isVine(el){
+    // avp-badge（Amazonで購入バッジ）があれば確実に非Vine
+    if(el.querySelector('[data-hook="avp-badge"]')) return false;
+    // テキストでも確認
+    var txt = el.textContent || '';
+    if(txt.indexOf('Amazonで購入') >= 0) return false;
+    if(txt.indexOf('Verified Purchase') >= 0) return false;
+    // Vine Voice バッジを積極確認
+    if(el.querySelector('[data-hook="vine-customer-review-tag"]')) return true;
+    if(txt.indexOf('Vine') >= 0 && txt.indexOf('Vineでの無料商品') >= 0) return true;
+    // ここまでで判定できない場合：購入バッジなし ＝ Vine と判定
+    // ただし本文・タイトルが極端に短い/空のケースは除外（フラグメント誤取得の可能性）
+    var bEl = el.querySelector('[data-hook="review-body"] span') || el.querySelector('[data-hook="review-body"]');
+    var body = bEl ? bEl.textContent.trim() : '';
+    if(body.length < 5) return false; // 本文が極短 = パース失敗の可能性が高い、非Vineとして安全側に
+    return true; // 購入バッジなしでかつ本文あり = Vine
+  }
+
   var MO={January:'01',February:'02',March:'03',April:'04',May:'05',June:'06',July:'07',August:'08',September:'09',October:'10',November:'11',December:'12'};
   function cleanDate(raw){
     var j=raw.match(/(\d{4})年\s*(\d{1,2})月\s*(\d{1,2})日/);if(j)return j[1]+'/'+('0'+j[2]).slice(-2)+'/'+('0'+j[3]).slice(-2);
     var e=raw.match(/(\w+)\s+(\d+),\s+(\d{4})/);if(e&&MO[e[1]])return e[3]+'/'+MO[e[1]]+'/'+('0'+e[2]).slice(-2);
-    return raw.replace(/に日本でレビュー済み.*/,'').trim();
+    return raw.replace(/に日本でレビュー済み.*/,'').replace(/Reviewed in.*on\s*/,'').trim();
   }
   function toYM(d){var m2=d.match(/^(\d{4})\/(\d{2})/);return m2?m2[1]+'/'+m2[2]:null;}
 
+  // ▼ 修正②: 重複除去をridベース優先、bodyは正規化（空白・改行を除去）して比較
   var _seen={};
-  function markSeen(r){_seen['bd:'+(r.body||'').slice(0,60)+'|'+r.date]=true;if(r.rid&&r.rid.length>3)_seen['id:'+r.rid]=true;}
-  function isSeen(rid,body,date){if(rid&&rid.length>3&&_seen['id:'+rid])return true;return !!_seen['bd:'+(body||'').slice(0,60)+'|'+date];}
+  function normalizeBody(b){ return (b||'').replace(/\s+/g,'').slice(0,80); }
+  function markSeen(r){
+    if(r.rid&&r.rid.length>3) _seen['id:'+r.rid]=true;
+    _seen['bd:'+normalizeBody(r.body)+'|'+r.date]=true;
+  }
+  function isSeen(rid,body,date){
+    if(rid&&rid.length>3&&_seen['id:'+rid])return true;
+    return !!_seen['bd:'+normalizeBody(body)+'|'+date];
+  }
 
   function parseReviewsFromHtml(html){
     var doc = new DOMParser().parseFromString(html, 'text/html');
@@ -82,7 +106,8 @@
       var dEl = el.querySelector('[data-hook="review-date"]') || el.querySelector('[class*="review-date"]');
       var date=cleanDate(dEl?dEl.textContent.trim():'');
       var vine=isVine(el),rid=el.id||'';
-      if(isSeen(rid,body,date))return;markSeen({rid:rid,body:body,date:date});
+      if(isSeen(rid,body,date))return;
+      markSeen({rid:rid,body:body,date:date});
       if(body||title)rv.push({rating:rating,title:title,body:body,date:date,vine:vine,rid:rid});
     });
     return rv;
@@ -115,22 +140,20 @@
   }
   function removeProgress(){ var bar=document.getElementById('_bhl_progress'); if(bar) bar.remove(); }
 
-  // ▼ 改善①: 空ページ許容を2→3に緩和、ページ上限引き上げ
   function fetchAllPages(baseUrl, label, filterStr, sortBy, targetAsin){
     sortBy = sortBy || 'recent';
     targetAsin = targetAsin || asin;
     var collected=[];
     var emptyCount=0;
-    var EMPTY_LIMIT=3;      // ← 2→3に緩和（連続3回空で停止）
-    var TOKEN_PAGE_LIMIT=25; // ← 15→25に引き上げ
-    var FALLBACK_PAGE_LIMIT=15; // ← 10→15に引き上げ
+    var EMPTY_LIMIT=3;
+    var TOKEN_PAGE_LIMIT=25;
+    var FALLBACK_PAGE_LIMIT=15;
 
     function doPage(pageUrl, pageNum){
       return fetch(pageUrl,{credentials:'include'}).then(function(res){return res.text();}).then(function(html){
         var revs=parseReviewsFromHtml(html);
         if(revs.length===0){
           emptyCount++;
-          // ▼ 改善②: 空でもnextTokenがあれば追跡継続
           var next=findNextToken(html,pageNum);
           if(emptyCount<EMPTY_LIMIT&&next&&next.token&&pageNum<TOKEN_PAGE_LIMIT){
             var nUrl='https://www.amazon.co.jp/product-reviews/'+targetAsin+'/?sortBy='+sortBy+'&pageNumber='+next.page+'&nextPageToken='+encodeURIComponent(next.token);
@@ -144,7 +167,7 @@
           }
           return collected;
         } else {
-          emptyCount=0; // 取得できたらリセット
+          emptyCount=0;
           collected=collected.concat(revs);
           revs.forEach(function(r){_totalReviews.push(r);});
           updateProgress(label+' p'+pageNum+' +'+revs.length+'件 (累計'+totalCount()+'件)');
@@ -199,7 +222,7 @@
       +'<div style="display:flex;align-items:center;justify-content:center;gap:20px;padding:12px 16px;background:#162032;border-bottom:1px solid #1E3A5F"><div style="text-align:center"><div style="font-size:28px;font-weight:700;color:#FF9900">'+aAll+'</div><div style="font-size:11px;color:#64748B">★ 全体平均</div></div><div style="width:1px;height:40px;background:#1E3A5F"></div><div style="text-align:center"><div style="font-size:28px;font-weight:700;color:#fff">'+reviews.length+'</div><div style="font-size:11px;color:#64748B">件取得</div></div><div style="width:1px;height:40px;background:#1E3A5F"></div><div style="text-align:center"><div style="font-size:20px;font-weight:700;color:#C4B5FD">'+vC+'<span style="font-size:12px;color:#64748B"> Vine</span></div><div style="font-size:11px;color:#64748B">'+vP+'%</div></div><div style="text-align:center"><div style="font-size:20px;font-weight:700;color:#67E8F9">'+nvC+'<span style="font-size:12px;color:#64748B"> 非Vine</span></div><div style="font-size:11px;color:#64748B">'+(100-vP)+'%</div></div></div>'
       +monthChart(reviews)
       +'<div style="padding:14px 16px;background:#162032;border-bottom:1px solid #1E3A5F">'+distChart(reviews,'■ 全体','#FF9900')+distChart(vRv,'■ Vine（Amazonで購入なし）','#C4B5FD')+distChart(nvRv,'■ 非Vine（Amazonで購入）','#67E8F9')+'</div>'
-      +'<div style="padding:10px 16px;border-bottom:1px solid #1E3A5F"><div style="font-size:10px;color:#475569;margin-bottom:6px">良い＝★5・4　普通＝★3　悪い＝★2・1　／　Vine＝Amazonで購入なし</div><div style="display:flex;gap:4px;flex-wrap:wrap;align-items:center"><button data-f="all" onclick="_bhlAmzFilter(\'all\',this)" style="padding:5px 10px;border-radius:20px;border:1px solid #FF9900;background:#FF9900;color:#000;font-size:11px;font-weight:700;cursor:pointer">全て('+reviews.length+')</button><button data-f="good" onclick="_bhlAmzFilter(\'good\',this)" style="padding:5px 10px;border-radius:20px;border:1px solid #22C55E;background:transparent;color:#22C55E;font-size:11px;cursor:pointer">★5・4 良い('+goodC+')</button><button data-f="mid" onclick="_bhlAmzFilter(\'mid\',this)" style="padding:5px 10px;border-radius:20px;border:1px solid #94A3B8;background:transparent;color:#94A3B8;font-size:11px;cursor:pointer">★3 普通('+midC+')</button><button data-f="bad" onclick="_bhlAmzFilter(\'bad\',this)" style="padding:5px 10px;border-radius:20px;border:1px solid #FF4B4B;background:transparent;color:#FF4B4B;font-size:11px;cursor:pointer">★2・1 悪い('+badC+')</button><button data-f="vine" onclick="_bhlAmzFilter(\'vine\',this)" style="padding:5px 10px;border-radius:20px;border:1px solid #8B5CF6;background:transparent;color:#C4B5FD;font-size:11px;cursor:pointer">Vine('+vC+')</button><button data-f="novine" onclick="_bhlAmzFilter(\'novine\',this)" style="padding:5px 10px;border-radius:20px;border:1px solid #06B6D4;background:transparent;color:#67E8F9;font-size:11px;cursor:pointer">非Vine('+nvC+')</button><button onclick="_bhlAmzCSV()" style="margin-left:auto;padding:5px 10px;border-radius:20px;border:1px solid #3B82F6;background:transparent;color:#3B82F6;font-size:11px;cursor:pointer">📥 CSV</button></div></div>'
+      +'<div style="padding:10px 16px;border-bottom:1px solid #1E3A5F"><div style="font-size:10px;color:#475569;margin-bottom:6px">良い＝★5・4　普通＝★3　悪い＝★2・1　／　Vine＝購入バッジなし（本文あり）</div><div style="display:flex;gap:4px;flex-wrap:wrap;align-items:center"><button data-f="all" onclick="_bhlAmzFilter(\'all\',this)" style="padding:5px 10px;border-radius:20px;border:1px solid #FF9900;background:#FF9900;color:#000;font-size:11px;font-weight:700;cursor:pointer">全て('+reviews.length+')</button><button data-f="good" onclick="_bhlAmzFilter(\'good\',this)" style="padding:5px 10px;border-radius:20px;border:1px solid #22C55E;background:transparent;color:#22C55E;font-size:11px;cursor:pointer">★5・4 良い('+goodC+')</button><button data-f="mid" onclick="_bhlAmzFilter(\'mid\',this)" style="padding:5px 10px;border-radius:20px;border:1px solid #94A3B8;background:transparent;color:#94A3B8;font-size:11px;cursor:pointer">★3 普通('+midC+')</button><button data-f="bad" onclick="_bhlAmzFilter(\'bad\',this)" style="padding:5px 10px;border-radius:20px;border:1px solid #FF4B4B;background:transparent;color:#FF4B4B;font-size:11px;cursor:pointer">★2・1 悪い('+badC+')</button><button data-f="vine" onclick="_bhlAmzFilter(\'vine\',this)" style="padding:5px 10px;border-radius:20px;border:1px solid #8B5CF6;background:transparent;color:#C4B5FD;font-size:11px;cursor:pointer">Vine('+vC+')</button><button data-f="novine" onclick="_bhlAmzFilter(\'novine\',this)" style="padding:5px 10px;border-radius:20px;border:1px solid #06B6D4;background:transparent;color:#67E8F9;font-size:11px;cursor:pointer">非Vine('+nvC+')</button><button onclick="_bhlAmzCSV()" style="margin-left:auto;padding:5px 10px;border-radius:20px;border:1px solid #3B82F6;background:transparent;color:#3B82F6;font-size:11px;cursor:pointer">📥 CSV</button></div></div>'
       +'<div id="_bhl_amz_list" style="padding:8px 16px 16px">'+listHTML+'</div>'
       +'<div style="padding:10px 16px;background:#162032;border-top:1px solid #1E3A5F;border-radius:0 0 12px 12px;text-align:center;font-size:11px;color:#475569">'+(reviews.length>300?reviews.length+'件中300件表示':'全'+reviews.length+'件を表示中')+'</div>';
     document.body.appendChild(panel);window._bhlAmzAllReviews=reviews;
@@ -209,9 +232,7 @@
   var ptEl = document.querySelector('#productTitle,h1.a-size-large,[data-hook="product-link"]');
   var productTitle = ptEl ? ptEl.textContent.trim() : 'ASIN: '+asin;
 
-  // ▼ 改善③: バリエーションASIN収集
   var variantAsins = collectVariantAsins();
-  // 自分自身のASINを先頭にし、最大5バリエーションまで（過剰なリクエスト防止）
   variantAsins = [asin].concat(variantAsins.filter(function(a){ return a !== asin; }).slice(0,4));
 
   var filters = [
@@ -233,7 +254,6 @@
   _totalReviews = [];
   updateProgress('取得開始... (バリエーション: '+variantAsins.length+'件検出)');
 
-  // メインASINのフィルター全パターンを先に実行
   var chain = Promise.resolve();
   filters.forEach(function(f){
     chain = chain.then(function(){
@@ -245,7 +265,6 @@
     });
   });
 
-  // ▼ 改善③続き: 追加バリエーションASINのレビューも取得（全体新着のみ）
   variantAsins.slice(1).forEach(function(vAsin){
     chain = chain.then(function(){
       updateProgress('バリエーション '+vAsin+' 取得中...');
@@ -265,7 +284,7 @@
     playDone();
     var vc = _totalReviews.filter(function(r){ return r.vine; }).length;
     var variantMsg = variantAsins.length>1 ? '\nバリエーション統合: '+variantAsins.length+'件' : '';
-    alert('✅ レビュー取得完了！\n\n合計 '+_totalReviews.length+' 件\n├ Vine（Amazonで購入なし）: '+vc+' 件\n└ 非Vine（Amazonで購入）: '+(_totalReviews.length-vc)+' 件'+variantMsg);
+    alert('✅ レビュー取得完了！\n\n合計 '+_totalReviews.length+' 件\n├ Vine（購入バッジなし）: '+vc+' 件\n└ 非Vine（Amazonで購入）: '+(_totalReviews.length-vc)+' 件'+variantMsg);
   }).catch(function(e){
     removeProgress();
     alert('エラー: '+e.message);
