@@ -65,23 +65,37 @@
 
   function getNextUrl(doc, cur){
     cur = cur||1;
-    /* .a-last リンク（nextPageToken付き優先） */
-    var lastA = doc.querySelector('.a-pagination .a-last a') || doc.querySelector('li.a-last a');
-    if(lastA && !lastA.closest('li.a-disabled')){
-      var h = lastA.getAttribute('href')||'', pg = h.match(/pageNumber=(\d+)/);
-      if(h && pg && parseInt(pg[1]) > cur) return h.startsWith('/')?'https://www.amazon.co.jp'+h:h;
+    /* 方法1: .a-last リンク（nextPageToken付き優先） */
+    var lastLi = doc.querySelector('.a-pagination .a-last') || doc.querySelector('li.a-last');
+    if(lastLi && !lastLi.classList.contains('a-disabled')){
+      var lastA = lastLi.querySelector('a');
+      if(lastA){
+        var h = lastA.getAttribute('href')||'', pg = h.match(/pageNumber=(\d+)/);
+        if(h && pg && parseInt(pg[1]) > cur) return h.startsWith('/')?'https://www.amazon.co.jp'+h:h;
+        /* pageNumberがなくてもhrefがあれば使う */
+        if(h && h.indexOf('product-reviews') >= 0) return h.startsWith('/')?'https://www.amazon.co.jp'+h:h;
+      }
     }
-    /* pageNumber付きリンクの最大値 */
+    /* 方法2: nextPageToken付きリンクから最大ページ番号 */
+    var tLinks = doc.querySelectorAll('a[href*="nextPageToken"]');
     var best=null, bestPg=cur;
-    doc.querySelectorAll('a[href*="pageNumber="]').forEach(function(a){
-      var lh=a.getAttribute('href')||'', lm=lh.match(/pageNumber=(\d+)/);
-      if(lm && parseInt(lm[1])>bestPg){ bestPg=parseInt(lm[1]); best=lh; }
-    });
+    for(var ti=0;ti<tLinks.length;ti++){
+      var th=tLinks[ti].getAttribute('href')||'', tpg=th.match(/pageNumber=(\d+)/);
+      if(tpg && parseInt(tpg[1])>bestPg){ bestPg=parseInt(tpg[1]); best=th; }
+    }
     if(best) return best.startsWith('/')?'https://www.amazon.co.jp'+best:best;
-    /* .a-last が disabled → 最終ページ */
-    if(lastA && lastA.closest('li.a-disabled')) return null;
-    /* .a-last 自体がない → 最終ページ */
-    if(!lastA) return null;
+    /* 方法3: pageNumber付きリンクの最大値 */
+    var allLinks = doc.querySelectorAll('a[href*="pageNumber="]');
+    var best3=null, bestPg3=cur;
+    for(var li=0;li<allLinks.length;li++){
+      var lh=allLinks[li].getAttribute('href')||'', lm=lh.match(/pageNumber=(\d+)/);
+      if(lm && parseInt(lm[1])>bestPg3){ bestPg3=parseInt(lm[1]); best3=lh; }
+    }
+    if(best3) return best3.startsWith('/')?'https://www.amazon.co.jp'+best3:best3;
+    /* 方法4: .a-last が disabled → 最終ページ確定 */
+    if(lastLi && lastLi.classList.contains('a-disabled')) return null;
+    /* 方法5: それ以外は次ページを試みる（上限12ページ） */
+    if(cur < 12) return 'https://www.amazon.co.jp/product-reviews/'+asin+'/?sortBy=recent&pageNumber='+(cur+1);
     return null;
   }
 
