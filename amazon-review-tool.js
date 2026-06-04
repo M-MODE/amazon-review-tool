@@ -1,13 +1,11 @@
-/* Amazon レビュー取得ツール v12.5 — bh life
- * v12.4からの修正:
- *   ① 空ページ判定: rawCount→「重複除去後の新規件数」で判断
- *     （Amazonは空ページでも広告要素が入るためrawCountは常に>0になる）
- *     → 新規レビューが0件のページが3回連続で終了
- *   ② パネル更新: _sを関数スコープ外のモジュール変数として確実に参照
+/* Amazon レビュー取得ツール v12.6 — bh life
+ * 根本修正: 状態をすべて window._bhlState_[asin] で管理
+ * IIFEのスコープに依存せず、どこからでも同じオブジェクトを参照
  */
 (function () {
   'use strict';
 
+  // ── ASIN取得 ──
   var url = location.href, asin = null, m;
   m = url.match(/\/dp\/([A-Z0-9]{10})/i); if (m) asin = m[1].toUpperCase();
   if (!asin) { m = url.match(/\/gp\/product\/([A-Z0-9]{10})/i); if (m) asin = m[1].toUpperCase(); }
@@ -18,14 +16,19 @@
     return;
   }
 
-  // ── 状態管理（グローバルに1つ） ──
-  var STORE_KEY = '_bhl_amz_v125_' + asin;
-  if (!window[STORE_KEY]) {
-    window[STORE_KEY] = { reviews: [], seen: {}, nextPage: 1, done: false };
+  // ── グローバル状態（IIFEをまたいで共有） ──
+  window._bhlState = window._bhlState || {};
+  if (!window._bhlState[asin]) {
+    window._bhlState[asin] = { reviews: [], seen: {}, nextPage: 1, done: false };
   }
-  var _s = window[STORE_KEY]; // 参照を固定
+
+  // ── 現在のASINを_bhlCurrentAsinとして記録（グローバル関数から参照） ──
+  window._bhlCurrentAsin = asin;
 
   var BATCH = 10;
+
+  // ── 状態アクセサ（常に最新を参照） ──
+  function S(){ return window._bhlState[window._bhlCurrentAsin]; }
 
   // ── ユーティリティ ──
   function parseRating(el) {
@@ -60,12 +63,14 @@
   function toYM(d){var m2=d.match(/^(\d{4})\/(\d{2})/);return m2?m2[1]+'/'+m2[2]:null;}
   function normBody(b){ return (b||'').replace(/\s+/g,'').slice(0,80); }
   function isSeen(rid,body,date){
-    if(rid&&rid.length>3&&_s.seen['id:'+rid])return true;
-    return !!_s.seen['bd:'+normBody(body)+'|'+date];
+    var s=S();
+    if(rid&&rid.length>3&&s.seen['id:'+rid])return true;
+    return !!s.seen['bd:'+normBody(body)+'|'+date];
   }
   function markSeen(r){
-    if(r.rid&&r.rid.length>3)_s.seen['id:'+r.rid]=true;
-    _s.seen['bd:'+normBody(r.body)+'|'+r.date]=true;
+    var s=S();
+    if(r.rid&&r.rid.length>3)s.seen['id:'+r.rid]=true;
+    s.seen['bd:'+normBody(r.body)+'|'+r.date]=true;
   }
   function delay(ms){ return new Promise(function(r){setTimeout(r,ms);}); }
 
@@ -92,46 +97,38 @@
           var dEl = el.querySelector('[data-hook="review-date"]') || el.querySelector('[class*="review-date"]');
           var date = cleanDate(dEl ? dEl.textContent.trim() : '');
           var vine = isVine(el), rid = el.id||'';
-          // ▼ 重複除去は後でまとめてやるため、ここではisSeen判定のみ
           if(isSeen(rid,body,date)) return;
           markSeen({rid:rid,body:body,date:date});
           if(body||title) rv.push({rating:rating,title:title,body:body,date:date,vine:vine,rid:rid});
         });
-        // ▼ 修正①: 新規件数(rv.length)で判断。0件=このページは既読 or 本当の空
         return {revs: rv, newCount: rv.length};
       })
       .catch(function(e){ console.warn('fetchPage err p'+pageNum, e); return {revs:[], newCount:0}; });
   }
 
-  // ── 1バッチ取得（10ページ、新規0件が3回連続で終了） ──
+  // ── 1バッチ取得 ──
   function fetchBatch(){
+    var s = S();
     var batchNew = [];
-    var emptyCount = 0;  // 新規0件の連続回数
-    var startPage = _s.nextPage;
+    var emptyCount = 0;
+    var startPage = s.nextPage;
     var endPage = startPage + BATCH - 1;
     var p = startPage;
 
     function next(){
       if(p > endPage) return Promise.resolve(batchNew);
-      setMsg('取得中 p' + p + ' / p' + endPage + '　(累計' + _s.reviews.length + '件)');
+      setMsg('取得中 p' + p + ' / p' + endPage + '　(累計' + S().reviews.length + '件)');
       return fetchPage(p).then(function(result){
+        var st = S();
         if(result.newCount === 0){
-          // ▼ 新規レビューなし
           emptyCount++;
-          if(emptyCount >= 3){
-            // 3回連続で新規なし → 全件取得完了
-            _s.done = true;
-            return batchNew;
-          }
-          p++;
-          _s.nextPage = p;
+          if(emptyCount >= 3){ st.done = true; return batchNew; }
+          p++; st.nextPage = p;
           return delay(600).then(next);
         }
-        // ▼ 新規あり
         emptyCount = 0;
-        result.revs.forEach(function(r){ _s.reviews.push(r); batchNew.push(r); });
-        p++;
-        _s.nextPage = p;
+        result.revs.forEach(function(r){ st.reviews.push(r); batchNew.push(r); });
+        p++; st.nextPage = p;
         return delay(400).then(next);
       });
     }
@@ -168,10 +165,10 @@
 
   function setMsg(txt){ var el=document.getElementById('_bhl_msg'); if(el) el.textContent=txt; }
 
-  // ── パネル描画 ──
-  function renderPanel(){
-    // ▼ 修正②: 毎回 _s.reviews から直接生成（参照ずれなし）
-    var reviews = window[STORE_KEY].reviews.slice().sort(function(a,b){return b.date.localeCompare(a.date);});
+  // ── パネル描画（グローバル関数として定義） ──
+  window._bhlRender = function(){
+    var st = S();
+    var reviews = st.reviews.slice().sort(function(a,b){return b.date.localeCompare(a.date);});
     var total = reviews.length;
     var vRv=reviews.filter(function(r){return r.vine;}),nvRv=reviews.filter(function(r){return !r.vine;});
     var vC=vRv.length,nvC=nvRv.length,vP=total>0?Math.round(vC/total*100):0;
@@ -179,6 +176,7 @@
     var midC=reviews.filter(function(r){return Math.round(r.rating)===3;}).length;
     var badC=reviews.filter(function(r){var s=Math.round(r.rating);return s<=2&&s>0;}).length;
     var aAll=avg(reviews)||'?';
+    var curNext=st.nextPage, isDone=st.done;
 
     var listHTML=reviews.slice(0,500).map(function(r,i){
       var rnd=Math.round(r.rating),stars='★'.repeat(rnd)+'☆'.repeat(5-rnd);
@@ -192,12 +190,9 @@
         +'<div style="color:#94A3B8;font-size:12px;line-height:1.6">'+r.body.replace(/\n/g,'<br>').substring(0,400)+(r.body.length>400?'…':'')+'</div></div>';
     }).join('');
 
-    var curNext = window[STORE_KEY].nextPage;
-    var isDone = window[STORE_KEY].done;
-
     var topSection = isDone
       ? '<div style="background:#064E3B;padding:13px 16px;border-radius:12px 12px 0 0;text-align:center;font-size:13px;font-weight:700;color:#22C55E">✅ 全件取得完了　合計 '+total+' 件</div>'
-      : '<div style="background:#0F172A;padding:10px 12px;border-radius:12px 12px 0 0;border-bottom:2px solid #3B82F6">'
+      : '<div style="background:#0F172A;padding:10px 12px;border-radius:12px 12px 0 0;border-bottom:2px solid #1D4ED8">'
         +'<button id="_bhl_next_btn" onclick="window._bhlNext()" style="width:100%;padding:13px;background:#1D4ED8;border:none;color:#fff;border-radius:8px;font-size:14px;font-weight:700;cursor:pointer">'
         +'▶ 次の約100件を取得　(p'+curNext+'〜p'+(curNext+BATCH-1)+')'
         +'</button>'
@@ -226,9 +221,7 @@
       +'<div style="text-align:center"><div style="font-size:20px;font-weight:700;color:#67E8F9">'+nvC+'<span style="font-size:12px;color:#64748B"> 非Vine</span></div><div style="font-size:11px;color:#64748B">'+(100-vP)+'%</div></div></div>'
       +monthChart(reviews)
       +'<div style="padding:14px 16px;background:#162032;border-bottom:1px solid #1E3A5F">'
-      +distChart(reviews,'■ 全体','#FF9900')
-      +distChart(vRv,'■ Vine（購入バッジなし）','#C4B5FD')
-      +distChart(nvRv,'■ 非Vine（Amazonで購入）','#67E8F9')
+      +distChart(reviews,'■ 全体','#FF9900')+distChart(vRv,'■ Vine（購入バッジなし）','#C4B5FD')+distChart(nvRv,'■ 非Vine（Amazonで購入）','#67E8F9')
       +'</div>'
       +'<div style="padding:10px 16px;border-bottom:1px solid #1E3A5F"><div style="display:flex;gap:4px;flex-wrap:wrap;align-items:center">'
       +'<button data-f="all" onclick="_bhlFilter(\'all\',this)" style="padding:5px 10px;border-radius:20px;border:1px solid #FF9900;background:#FF9900;color:#000;font-size:11px;font-weight:700;cursor:pointer">全て('+total+')</button>'
@@ -245,19 +238,19 @@
 
     document.body.appendChild(panel);
     window._bhlAmzAllReviews = reviews;
-  }
+  };
 
   // ── グローバル関数 ──
   window._bhlNext = function(){
     var btn=document.getElementById('_bhl_next_btn');
     if(btn){btn.disabled=true;btn.textContent='取得中...';btn.style.background='#1E3A5F';btn.style.cursor='default';}
     fetchBatch().then(function(newRevs){
-      renderPanel();
-      var s = window[STORE_KEY];
+      window._bhlRender();
+      var st=S();
       setMsg(newRevs.length>0
-        ?'✅ '+newRevs.length+'件追加（累計'+s.reviews.length+'件）'+(s.done?' 全件完了！':'')
-        :(s.done?'✅ 全件取得完了':'⚠️ 0件でした'));
-      if(s.done) playDone();
+        ?'✅ '+newRevs.length+'件追加（累計'+st.reviews.length+'件）'+(st.done?' 全件完了！':'')
+        :(st.done?'✅ 全件取得完了':'⚠️ 0件でした'));
+      if(st.done) playDone();
     });
   };
   window._bhlCSV=function(){
@@ -278,9 +271,9 @@
 
   // ── 初回実行 ──
   var pb=document.getElementById('_bhl_prog'); if(pb) pb.remove();
-  if(_s.reviews.length > 0){
-    renderPanel();
-    setMsg('前回データ引き継ぎ（累計'+_s.reviews.length+'件 / p'+(_s.nextPage-1)+'まで済み）');
+  if(S().reviews.length > 0){
+    window._bhlRender();
+    setMsg('前回データ引き継ぎ（累計'+S().reviews.length+'件 / p'+(S().nextPage-1)+'まで済み）');
     return;
   }
   var bar=document.createElement('div');bar.id='_bhl_prog';
@@ -289,9 +282,9 @@
   document.body.appendChild(bar);
   fetchBatch().then(function(newRevs){
     var pb2=document.getElementById('_bhl_prog'); if(pb2) pb2.remove();
-    renderPanel();
-    setMsg('1回目完了: '+newRevs.length+'件取得（累計'+_s.reviews.length+'件）'+(_s.done?' 全件完了！':''));
-    if(_s.done && newRevs.length>0) playDone();
+    window._bhlRender();
+    setMsg('1回目完了: '+newRevs.length+'件取得（累計'+S().reviews.length+'件）'+(S().done?' 全件完了！':''));
+    if(S().done && newRevs.length>0) playDone();
   });
 
 })();
