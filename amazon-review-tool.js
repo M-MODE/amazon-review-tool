@@ -8,6 +8,10 @@
   if (!asin) { m = url.match(/\/gp\/product\/([A-Z0-9]{10})/i); if (m) asin = m[1].toUpperCase(); }
   if (!asin) { m = url.match(/\/product-reviews\/([A-Z0-9]{10})/i); if (m) asin = m[1].toUpperCase(); }
   if (!asin) { alert('Amazonの商品ページまたはレビューページで実行してください'); return; }
+  if (url.indexOf('/product-reviews/') < 0) {
+    location.href = 'https://www.amazon.co.jp/product-reviews/' + asin + '/?sortBy=recent&pageNumber=1';
+    return;
+  }
 
   var ep = document.getElementById('_bhl_amz_panel'); if (ep) ep.remove();
   var eb = document.getElementById('_bhl_progress'); if (eb) eb.remove();
