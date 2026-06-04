@@ -9,7 +9,7 @@
   if (!asin) { m = url.match(/\/product-reviews\/([A-Z0-9]{10})/i); if (m) asin = m[1].toUpperCase(); }
   if (!asin) { alert('Amazonの商品ページまたはレビューページで実行してください'); return; }
   if (url.indexOf('/product-reviews/') < 0) {
-    location.href = 'https://www.amazon.co.jp/product-reviews/' + asin + '/?sortBy=recent&pageNumber=1';
+    window.location.replace('https://www.amazon.co.jp/product-reviews/' + asin + '/?sortBy=recent&pageNumber=1#_bhl_auto');
     return;
   }
 
@@ -86,7 +86,8 @@
   }
   function removeProgress(){ var bar=document.getElementById('_bhl_progress'); if(bar) bar.remove(); }
 
-  function fetchAllPages(baseUrl, label, filterStr){
+  function fetchAllPages(baseUrl, label, filterStr, sortBy){
+    sortBy = sortBy || 'recent';
     var collected=[];var emptyCount=0;
     function doPage(pageUrl, pageNum){
       return fetch(pageUrl,{credentials:'include'}).then(function(res){return res.text();}).then(function(html){
@@ -95,19 +96,19 @@
         else{emptyCount=0;collected=collected.concat(revs);revs.forEach(function(r){_totalReviews.push(r);});updateProgress(label+' p'+pageNum+' +'+revs.length+'件 (累計'+totalCount()+'件)');}
         var next=findNextToken(html,pageNum);
         if(next&&next.token&&pageNum<15){
-          var nUrl='https://www.amazon.co.jp/product-reviews/'+asin+'/?sortBy=recent&pageNumber='+next.page+'&nextPageToken='+encodeURIComponent(next.token);
+          var nUrl='https://www.amazon.co.jp/product-reviews/'+asin+'/?sortBy='+sortBy+'&pageNumber='+next.page+'&nextPageToken='+encodeURIComponent(next.token);
           if(filterStr)nUrl+='&filterByStar='+filterStr;
           return delay(400).then(function(){return doPage(nUrl,next.page);});
         }
         if(pageNum<10&&revs.length>0){
-          var fUrl='https://www.amazon.co.jp/product-reviews/'+asin+'/?sortBy=recent&pageNumber='+(pageNum+1);
+          var fUrl='https://www.amazon.co.jp/product-reviews/'+asin+'/?sortBy='+sortBy+'&pageNumber='+(pageNum+1);
           if(filterStr)fUrl+='&filterByStar='+filterStr;
           return delay(400).then(function(){return doPage(fUrl,pageNum+1);});
         }
         return collected;
       }).catch(function(e){console.warn('fetch err:',e);return collected;});
     }
-    var startUrl='https://www.amazon.co.jp/product-reviews/'+asin+'/?sortBy=recent&pageNumber=1';
+    var startUrl='https://www.amazon.co.jp/product-reviews/'+asin+'/?sortBy='+sortBy+'&pageNumber=1';
     if(filterStr)startUrl+='&filterByStar='+filterStr;
     return doPage(startUrl,1);
   }
@@ -152,12 +153,18 @@
   var ptEl = document.querySelector('#productTitle,h1.a-size-large,[data-hook="product-link"]');
   var productTitle = ptEl ? ptEl.textContent.trim() : 'ASIN: '+asin;
   var filters = [
-    {filter:'', label:'全体(新着順)'},
-    {filter:'five_star', label:'★5'},
-    {filter:'four_star', label:'★4'},
-    {filter:'three_star', label:'★3'},
-    {filter:'two_star', label:'★2'},
-    {filter:'one_star', label:'★1'}
+    {filter:'', label:'全体(新着順)', sort:'recent'},
+    {filter:'five_star', label:'★5(新着)', sort:'recent'},
+    {filter:'four_star', label:'★4(新着)', sort:'recent'},
+    {filter:'three_star', label:'★3(新着)', sort:'recent'},
+    {filter:'two_star', label:'★2(新着)', sort:'recent'},
+    {filter:'one_star', label:'★1(新着)', sort:'recent'},
+    {filter:'', label:'全体(役立ち順)', sort:'helpful'},
+    {filter:'five_star', label:'★5(役立ち)', sort:'helpful'},
+    {filter:'four_star', label:'★4(役立ち)', sort:'helpful'},
+    {filter:'three_star', label:'★3(役立ち)', sort:'helpful'},
+    {filter:'two_star', label:'★2(役立ち)', sort:'helpful'},
+    {filter:'one_star', label:'★1(役立ち)', sort:'helpful'}
   ];
 
   _seen = {};
@@ -168,10 +175,10 @@
   filters.forEach(function(f){
     chain = chain.then(function(){
       updateProgress(f.label+' 取得中...');
-      return fetchAllPages('https://www.amazon.co.jp/product-reviews/'+asin+'/?sortBy=recent', f.label, f.filter);
+      return fetchAllPages('', f.label, f.filter, f.sort);
     }).then(function(){
       updateProgress(f.label+' 完了 (累計'+totalCount()+'件)');
-      return delay(500);
+      return delay(300);
     });
   });
 
