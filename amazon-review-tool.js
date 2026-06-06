@@ -1,6 +1,6 @@
-/* Amazon レビュー取得ツール v14.1 — bh life
+/* Amazon レビュー取得ツール v14.2 — bh life
  * 方式: 「さらに10 件のレビューを表示」自動連打方式
- * v14.1修正: クリック対象はid=cm_cr-pagination_barのDIV（確認済み）
+ * v14.2: クリック対象を a.a-button-text に確定（実機検証で10→20件確認済み）
  *   - fetch方式（v13.1）はAmazonのブロックで150件前後が限界だった
  *   - 実画面の cm_cr-show-more ボタンを自動クリックして全件を展開
  *   - 展開しきったらDOMから全レビューを収集
@@ -56,28 +56,20 @@
 
   // ── 「さらに表示」ボタンを探す ──
   function findShowMoreButton(){
-    // 確認済み: id="cm_cr-pagination_bar" のDIV自体がクリック対象
-    // テキストは「さらに10 件のレビューを表示」（スペースあり）
+    // 検証済み: #cm_cr-pagination_bar 内の a.a-button-text をクリックすると10件増える
     var bar = document.getElementById('cm_cr-pagination_bar');
-    if(bar){
-      var t = (bar.textContent||'').trim();
-      // 「さらに...レビュー...表示」を含むなら、まだ続きがある
-      if(t.indexOf('さらに')>=0 && t.indexOf('レビュー')>=0 && t.indexOf('表示')>=0){
-        // 内部にクリック可能な要素(a/input/span.a-button)があればそれを、なければバー自体を返す
-        var inner = bar.querySelector('a, input.a-button-input, span.a-button-inner, .a-button');
-        return inner || bar;
-      }
-      return null; // バーはあるが「さらに表示」文言がない = 全部展開済み
+    if(!bar) return null;
+    var t = (bar.textContent||'').trim();
+    // 「さらに...レビュー...表示」文言が無ければ全部展開済み
+    if(!(t.indexOf('さらに')>=0 && t.indexOf('レビュー')>=0 && t.indexOf('表示')>=0)){
+      return null;
     }
-    // フォールバック: 部分一致でテキスト検索
-    var all = document.querySelectorAll('div,a,span,button,input');
-    for(var i=0;i<all.length;i++){
-      var tx=(all[i].textContent||'').trim();
-      if(tx.indexOf('さらに')>=0 && tx.indexOf('レビュー')>=0 && tx.indexOf('表示')>=0 && tx.length<40){
-        return all[i];
-      }
-    }
-    return null;
+    // クリック対象（優先順位順）
+    var target = bar.querySelector('a.a-button-text')
+              || bar.querySelector('.a-button-input')
+              || bar.querySelector('a')
+              || bar.querySelector('.cm_cr-show-more');
+    return target;
   }
 
   // ── 進捗バー ──
@@ -126,25 +118,12 @@
         return delay(800).then(step);
       }
 
-      // ボタンをクリック（DIV対応: 見える位置にスクロールしてから複数手法でクリック）
-      try {
-        btn.scrollIntoView({block:'center'});
-      } catch(e){}
-      // 通常のclick
+      // ボタンをクリック（検証済み: a.a-button-text への click() で10件増加）
+      try { btn.scrollIntoView({block:'center'}); } catch(e){}
       btn.click();
-      // 内部のリンク/インプットも念のためクリック
-      var innerClickable = btn.querySelector ? btn.querySelector('a, input, .a-button-input') : null;
-      if(innerClickable){ try { innerClickable.click(); } catch(e){} }
-      // マウスイベントも発火（一部のAmazonボタン対策）
-      try {
-        ['mousedown','mouseup','click'].forEach(function(type){
-          btn.dispatchEvent(new MouseEvent(type, {bubbles:true, cancelable:true, view:window}));
-        });
-      } catch(e){}
       clicks++;
-      // ページ最下部にスクロール（遅延読み込み対策）
-      window.scrollTo(0, document.body.scrollHeight);
-      return delay(1500).then(step); // 1.5秒待って次へ
+      // 2秒待って次へ（読み込み完了を待つ）
+      return delay(2000).then(step);
     }
     return step();
   }
